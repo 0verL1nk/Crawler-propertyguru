@@ -1,0 +1,481 @@
+"""
+数据库管理模块
+支持 MySQL, MongoDB, Redis
+"""
+
+import pymongo
+import pymysql
+import redis
+from typing import Any, Dict, List, Optional, Union
+from contextlib import contextmanager
+from sqlalchemy import create_engine, MetaData, Table, Column
+from sqlalchemy.orm import sessionmaker, Session
+from sqlalchemy.pool import QueuePool
+from utils.logger import get_logger
+
+logger = get_logger("DatabaseManager")
+
+
+class MongoDBManager:
+    """MongoDB管理器"""
+    
+    def __init__(self, config: dict):
+        """
+        初始化MongoDB连接
+        
+        Args:
+            config: MongoDB配置
+        """
+        self.config = config
+        self.client = None
+        self.db = None
+        self._connect()
+    
+    def _connect(self):
+        """建立连接"""
+        try:
+            # 构建连接URI
+            username = self.config.get('username', '')
+            password = self.config.get('password', '')
+            host = self.config.get('host', 'localhost')
+            port = self.config.get('port', 27017)
+            database = self.config.get('database', 'crawler_db')
+            
+            if username and password:
+                uri = f"mongodb://{username}:{password}@{host}:{port}/"
+            else:
+                uri = f"mongodb://{host}:{port}/"
+            
+            # 如果配置中有完整URI，使用它
+            uri = self.config.get('uri', uri)
+            
+            self.client = pymongo.MongoClient(
+                uri,
+                maxPoolSize=50,
+                minPoolSize=10,
+                serverSelectionTimeoutMS=5000
+            )
+            self.db = self.client[database]
+            
+            # 测试连接
+            self.client.server_info()
+            logger.info(f"MongoDB连接成功: {database}")
+        except Exception as e:
+            logger.error(f"MongoDB连接失败: {e}")
+            raise
+    
+    def get_collection(self, collection_name: str):
+        """
+        获取集合
+        
+        Args:
+            collection_name: 集合名称
+        
+        Returns:
+            MongoDB集合对象
+        """
+        return self.db[collection_name]
+    
+    def insert_one(self, collection: str, document: dict) -> str:
+        """
+        插入单条文档
+        
+        Args:
+            collection: 集合名称
+            document: 文档数据
+        
+        Returns:
+            插入的文档ID
+        """
+        try:
+            result = self.db[collection].insert_one(document)
+            logger.debug(f"插入文档成功: {collection}")
+            return str(result.inserted_id)
+        except Exception as e:
+            logger.error(f"插入文档失败: {e}")
+            raise
+    
+    def insert_many(self, collection: str, documents: List[dict]) -> List[str]:
+        """
+        批量插入文档
+        
+        Args:
+            collection: 集合名称
+            documents: 文档列表
+        
+        Returns:
+            插入的文档ID列表
+        """
+        try:
+            result = self.db[collection].insert_many(documents)
+            logger.debug(f"批量插入 {len(documents)} 条文档: {collection}")
+            return [str(id) for id in result.inserted_ids]
+        except Exception as e:
+            logger.error(f"批量插入文档失败: {e}")
+            raise
+    
+    def find_one(self, collection: str, query: dict) -> Optional[dict]:
+        """
+        查询单条文档
+        
+        Args:
+            collection: 集合名称
+            query: 查询条件
+        
+        Returns:
+            文档数据或None
+        """
+        try:
+            return self.db[collection].find_one(query)
+        except Exception as e:
+            logger.error(f"查询文档失败: {e}")
+            raise
+    
+    def find_many(self, collection: str, query: dict = None, 
+                  limit: int = 0, skip: int = 0) -> List[dict]:
+        """
+        查询多条文档
+        
+        Args:
+            collection: 集合名称
+            query: 查询条件
+            limit: 限制数量
+            skip: 跳过数量
+        
+        Returns:
+            文档列表
+        """
+        try:
+            query = query or {}
+            cursor = self.db[collection].find(query).skip(skip)
+            if limit > 0:
+                cursor = cursor.limit(limit)
+            return list(cursor)
+        except Exception as e:
+            logger.error(f"查询文档失败: {e}")
+            raise
+    
+    def update_one(self, collection: str, query: dict, update: dict) -> int:
+        """
+        更新单条文档
+        
+        Args:
+            collection: 集合名称
+            query: 查询条件
+            update: 更新内容
+        
+        Returns:
+            更新的文档数
+        """
+        try:
+            result = self.db[collection].update_one(query, {'$set': update})
+            return result.modified_count
+        except Exception as e:
+            logger.error(f"更新文档失败: {e}")
+            raise
+    
+    def delete_one(self, collection: str, query: dict) -> int:
+        """
+        删除单条文档
+        
+        Args:
+            collection: 集合名称
+            query: 查询条件
+        
+        Returns:
+            删除的文档数
+        """
+        try:
+            result = self.db[collection].delete_one(query)
+            return result.deleted_count
+        except Exception as e:
+            logger.error(f"删除文档失败: {e}")
+            raise
+    
+    def close(self):
+        """关闭连接"""
+        if self.client:
+            self.client.close()
+            logger.info("MongoDB连接已关闭")
+
+
+class MySQLManager:
+    """MySQL管理器"""
+    
+    def __init__(self, config: dict):
+        """
+        初始化MySQL连接
+        
+        Args:
+            config: MySQL配置
+        """
+        self.config = config
+        self.engine = None
+        self.Session = None
+        self._connect()
+    
+    def _connect(self):
+        """建立连接"""
+        try:
+            username = self.config.get('username', 'root')
+            password = self.config.get('password', '')
+            host = self.config.get('host', 'localhost')
+            port = self.config.get('port', 3306)
+            database = self.config.get('database', 'crawler_db')
+            charset = self.config.get('charset', 'utf8mb4')
+            
+            # 构建连接URI
+            uri = f"mysql+pymysql://{username}:{password}@{host}:{port}/{database}?charset={charset}"
+            
+            # 如果配置中有完整URI，使用它
+            uri = self.config.get('uri', uri)
+            
+            # 创建引擎
+            self.engine = create_engine(
+                uri,
+                poolclass=QueuePool,
+                pool_size=10,
+                max_overflow=20,
+                pool_recycle=3600,
+                echo=False
+            )
+            
+            # 创建Session工厂
+            self.Session = sessionmaker(bind=self.engine)
+            
+            # 测试连接
+            with self.engine.connect() as conn:
+                conn.execute("SELECT 1")
+            
+            logger.info(f"MySQL连接成功: {database}")
+        except Exception as e:
+            logger.error(f"MySQL连接失败: {e}")
+            raise
+    
+    @contextmanager
+    def get_session(self) -> Session:
+        """
+        获取数据库会话（上下文管理器）
+        
+        Yields:
+            SQLAlchemy Session
+        """
+        session = self.Session()
+        try:
+            yield session
+            session.commit()
+        except Exception as e:
+            session.rollback()
+            logger.error(f"数据库操作失败: {e}")
+            raise
+        finally:
+            session.close()
+    
+    def execute(self, sql: str, params: dict = None) -> Any:
+        """
+        执行SQL语句
+        
+        Args:
+            sql: SQL语句
+            params: 参数
+        
+        Returns:
+            执行结果
+        """
+        try:
+            with self.engine.connect() as conn:
+                result = conn.execute(sql, params or {})
+                conn.commit()
+                return result
+        except Exception as e:
+            logger.error(f"SQL执行失败: {e}")
+            raise
+    
+    def execute_many(self, sql: str, params_list: List[dict]) -> Any:
+        """
+        批量执行SQL
+        
+        Args:
+            sql: SQL语句
+            params_list: 参数列表
+        
+        Returns:
+            执行结果
+        """
+        try:
+            with self.engine.connect() as conn:
+                result = conn.execute(sql, params_list)
+                conn.commit()
+                return result
+        except Exception as e:
+            logger.error(f"批量SQL执行失败: {e}")
+            raise
+    
+    def close(self):
+        """关闭连接"""
+        if self.engine:
+            self.engine.dispose()
+            logger.info("MySQL连接已关闭")
+
+
+class RedisManager:
+    """Redis管理器"""
+    
+    def __init__(self, config: dict):
+        """
+        初始化Redis连接
+        
+        Args:
+            config: Redis配置
+        """
+        self.config = config
+        self.client = None
+        self._connect()
+    
+    def _connect(self):
+        """建立连接"""
+        try:
+            host = self.config.get('host', 'localhost')
+            port = self.config.get('port', 6379)
+            db = self.config.get('db', 0)
+            password = self.config.get('password')
+            
+            # 如果配置中有URL，使用它
+            url = self.config.get('url')
+            
+            if url:
+                self.client = redis.from_url(
+                    url,
+                    decode_responses=True,
+                    max_connections=50
+                )
+            else:
+                self.client = redis.Redis(
+                    host=host,
+                    port=port,
+                    db=db,
+                    password=password,
+                    decode_responses=True,
+                    max_connections=50
+                )
+            
+            # 测试连接
+            self.client.ping()
+            logger.info("Redis连接成功")
+        except Exception as e:
+            logger.error(f"Redis连接失败: {e}")
+            raise
+    
+    def get(self, key: str) -> Optional[str]:
+        """获取值"""
+        try:
+            return self.client.get(key)
+        except Exception as e:
+            logger.error(f"Redis GET失败: {e}")
+            raise
+    
+    def set(self, key: str, value: str, ex: int = None) -> bool:
+        """
+        设置值
+        
+        Args:
+            key: 键
+            value: 值
+            ex: 过期时间（秒）
+        
+        Returns:
+            是否成功
+        """
+        try:
+            return self.client.set(key, value, ex=ex)
+        except Exception as e:
+            logger.error(f"Redis SET失败: {e}")
+            raise
+    
+    def delete(self, *keys: str) -> int:
+        """删除键"""
+        try:
+            return self.client.delete(*keys)
+        except Exception as e:
+            logger.error(f"Redis DELETE失败: {e}")
+            raise
+    
+    def exists(self, key: str) -> bool:
+        """检查键是否存在"""
+        try:
+            return bool(self.client.exists(key))
+        except Exception as e:
+            logger.error(f"Redis EXISTS失败: {e}")
+            raise
+    
+    def lpush(self, key: str, *values: str) -> int:
+        """列表左侧推入"""
+        try:
+            return self.client.lpush(key, *values)
+        except Exception as e:
+            logger.error(f"Redis LPUSH失败: {e}")
+            raise
+    
+    def rpop(self, key: str) -> Optional[str]:
+        """列表右侧弹出"""
+        try:
+            return self.client.rpop(key)
+        except Exception as e:
+            logger.error(f"Redis RPOP失败: {e}")
+            raise
+    
+    def close(self):
+        """关闭连接"""
+        if self.client:
+            self.client.close()
+            logger.info("Redis连接已关闭")
+
+
+class DatabaseManager:
+    """统一数据库管理器"""
+    
+    def __init__(self, config: dict):
+        """
+        初始化数据库管理器
+        
+        Args:
+            config: 数据库配置
+        """
+        self.config = config
+        self.db_type = config.get('type', 'mongodb')
+        self.db = None
+        self.redis = None
+        
+        # 初始化主数据库
+        if self.db_type == 'mongodb':
+            mongodb_config = config.get('mongodb', {})
+            self.db = MongoDBManager(mongodb_config)
+        elif self.db_type == 'mysql':
+            mysql_config = config.get('mysql', {})
+            self.db = MySQLManager(mysql_config)
+        else:
+            logger.warning(f"不支持的数据库类型: {self.db_type}")
+        
+        # 初始化Redis（如果配置了）
+        redis_config = config.get('redis')
+        if redis_config:
+            try:
+                self.redis = RedisManager(redis_config)
+            except Exception as e:
+                logger.warning(f"Redis初始化失败: {e}")
+    
+    def get_db(self) -> Union[MongoDBManager, MySQLManager]:
+        """获取数据库实例"""
+        return self.db
+    
+    def get_redis(self) -> Optional[RedisManager]:
+        """获取Redis实例"""
+        return self.redis
+    
+    def close(self):
+        """关闭所有连接"""
+        if self.db:
+            self.db.close()
+        if self.redis:
+            self.redis.close()
+

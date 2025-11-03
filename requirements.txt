@@ -1,0 +1,50 @@
+# HTTP请求和爬虫相关
+requests>=2.31.0
+httpx>=0.25.0
+aiohttp>=3.9.0
+beautifulsoup4>=4.12.0
+lxml>=4.9.0
+selenium>=4.15.0
+playwright>=1.40.0
+
+# 代理和网络
+PySocks>=1.7.1
+requests[socks]>=2.31.0
+
+# 数据库
+pymongo>=4.6.0
+pymysql>=1.1.0
+sqlalchemy>=2.0.0
+redis>=5.0.0
+
+# AWS S3存储
+boto3>=1.34.0
+botocore>=1.34.0
+
+# 异步支持
+asyncio>=3.4.3
+aiofiles>=23.2.0
+
+# 数据处理
+pandas>=2.1.0
+numpy>=1.26.0
+
+# 配置和环境
+python-dotenv>=1.0.0
+pyyaml>=6.0.1
+
+# 日志和监控
+loguru>=0.7.2
+
+# 工具库
+tenacity>=8.2.3
+fake-useragent>=1.4.0
+python-dateutil>=2.8.2
+
+# 加密和安全
+cryptography>=41.0.0
+
+# 并发和调度
+schedule>=1.2.0
+apscheduler>=3.10.4
+
