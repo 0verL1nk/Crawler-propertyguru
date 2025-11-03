@@ -43,6 +43,9 @@ dependencies = [
     "boto3>=1.34.0",
     "botocore>=1.34.0",
 
+    # 七牛云存储
+    "qiniu>=7.11.0",
+
     # 异步支持
     "aiofiles>=23.2.0",
 
@@ -180,4 +183,4 @@ testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
-addopts = "-v --cov=crawler --cov-report=html --cov-report=term"
+addopts = "-v"

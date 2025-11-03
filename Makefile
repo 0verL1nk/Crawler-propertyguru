@@ -12,7 +12,7 @@ install-dev: ## 安装开发依赖
 
 lint: ## 运行所有lint检查
 	@echo "运行 ruff..."
-	ruff check .
+	ruff check --fix .
 	@echo "运行 flake8..."
 	flake8 .
 	@echo "✓ Lint检查完成"

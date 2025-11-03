@@ -19,7 +19,7 @@ from utils.logger import get_logger
 from .config import Config
 from .database import DatabaseManager
 from .proxy_manager import ProxyManager
-from .storage import S3Manager
+from .storage import StorageManagerProtocol, create_storage_manager
 
 
 class DatabaseProtocol(Protocol):
@@ -122,7 +122,7 @@ class Spider:
         # 初始化组件
         self.proxy_manager: Optional[ProxyManager] = None
         self.db_manager: Optional[DatabaseManager] = None
-        self.s3_manager: Optional[S3Manager] = None
+        self.s3_manager: Optional[StorageManagerProtocol] = None
         self.proxy_adapter: Optional[Any] = None
 
         self._init_components()
@@ -175,10 +175,11 @@ class Spider:
             return
 
         try:
-            self.s3_manager = S3Manager(s3_config)
-            logger.info("S3存储管理器已启用")
+            # 使用工厂函数创建存储管理器（支持S3和七牛云）
+            self.s3_manager = create_storage_manager(s3_config)
+            logger.info("存储管理器已启用")
         except Exception as e:
-            logger.warning(f"S3存储管理器初始化失败: {e}")
+            logger.warning(f"存储管理器初始化失败: {e}")
 
     def _setup_proxy_session(self):
         """设置会话代理（如果使用静态代理）"""
