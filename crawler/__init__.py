@@ -6,9 +6,8 @@
 __version__ = "1.0.0"
 __author__ = "Your Name"
 
-from .spider import Spider
-from .config import Config
 from .browser import RemoteBrowser, scrape_with_browser
+from .config import Config
+from .spider import Spider
 
-__all__ = ['Spider', 'Config', 'RemoteBrowser', 'scrape_with_browser']
-
+__all__ = ["Spider", "Config", "RemoteBrowser", "scrape_with_browser"]

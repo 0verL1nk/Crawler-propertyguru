@@ -1,4 +1,4 @@
-.PHONY: help install install-dev lint format type-check test clean
+.PHONY: help install install-dev lint format type-check test clean pre-commit-install pre-commit-uninstall pre-commit-run
 
 help: ## 显示帮助信息
 	@echo "可用命令:"
@@ -53,8 +53,10 @@ clean: ## 清理临时文件
 pre-commit-install: ## 安装pre-commit hooks
 	pre-commit install
 
+pre-commit-uninstall: ## 卸载pre-commit hooks
+	pre-commit uninstall
+
 pre-commit-run: ## 手动运行pre-commit检查所有文件
 	pre-commit run --all-files
 
 all: format check test ## 运行格式化、检查和测试
-

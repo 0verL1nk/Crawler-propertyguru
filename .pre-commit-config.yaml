@@ -12,34 +12,39 @@ repos:
       - id: debug-statements
       - id: mixed-line-ending
 
-  - repo: https://github.com/psf/black
-    rev: 23.12.1
+  - repo: local
     hooks:
       - id: black
-        language_version: python3.9
+        name: black
+        entry: black
+        language: system
         args: [--line-length=100]
+        types: [python]
 
-  - repo: https://github.com/charliermarsh/ruff-pre-commit
-    rev: v0.1.9
+  - repo: local
     hooks:
       - id: ruff
-        args: [--fix, --exit-non-zero-on-fix]
+        name: ruff
+        entry: ruff
+        language: system
+        args: [check, --fix, --exit-non-zero-on-fix]
+        types: [python]
 
-  - repo: https://github.com/pre-commit/mirrors-isort
-    rev: v5.13.2
+  - repo: local
     hooks:
       - id: isort
+        name: isort
+        entry: isort
+        language: system
         args: [--profile=black, --line-length=100]
+        types: [python]
 
-  - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: v1.8.0
+  - repo: local
     hooks:
       - id: mypy
-        additional_dependencies: [
-          types-requests,
-          types-PyYAML,
-          types-redis,
-        ]
+        name: mypy
+        entry: mypy
+        language: system
         args: [--ignore-missing-imports]
-        exclude: ^(examples/|tests/)
-
+        types: [python]
+        exclude: ^(examples/|tests/|Ref/)
