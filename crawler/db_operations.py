@@ -14,10 +14,7 @@ from sqlalchemy.dialects.mysql import insert
 from utils.logger import get_logger
 
 from .database import DatabaseManager, MySQLManager
-from .orm_models import (
-    ListingInfoORM,
-    MediaItemORM,
-)
+from .orm_models import ListingInfoORM, MediaItemORM
 
 if TYPE_CHECKING:
     from .models import ListingInfo, MediaItem, PropertyDetails
