@@ -11,7 +11,8 @@ exclude =
     *.egg-info,
     .mypy_cache,
     .pytest_cache,
-    .ruff_cache
+    .ruff_cache,
+    tests
 max-complexity = 10
 ignore =
     E203,

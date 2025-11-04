@@ -1,0 +1,126 @@
+{
+  "proxies": [
+    {
+      "ip": "60.177.104.138",
+      "port": 11937,
+      "protocol": "http",
+      "username": "xmdl1cbe",
+      "password": "xmdl5787",
+      "fail_count": 0,
+      "last_used": 0.0,
+      "response_time": 0.0,
+      "expires_at": 1762186924.820496,
+      "created_at": 1762186624.820503
+    },
+    {
+      "ip": "180.119.157.171",
+      "port": 10415,
+      "protocol": "http",
+      "username": "xmdl1cbe",
+      "password": "xmdl5787",
+      "fail_count": 0,
+      "last_used": 0.0,
+      "response_time": 0.0,
+      "expires_at": 1762186924.820496,
+      "created_at": 1762186624.8205063
+    },
+    {
+      "ip": "58.62.115.253",
+      "port": 11218,
+      "protocol": "http",
+      "username": "xmdl1cbe",
+      "password": "xmdl5787",
+      "fail_count": 0,
+      "last_used": 0.0,
+      "response_time": 0.0,
+      "expires_at": 1762186924.820496,
+      "created_at": 1762186624.820508
+    },
+    {
+      "ip": "110.90.14.18",
+      "port": 12110,
+      "protocol": "http",
+      "username": "xmdl1cbe",
+      "password": "xmdl5787",
+      "fail_count": 0,
+      "last_used": 0.0,
+      "response_time": 0.0,
+      "expires_at": 1762186924.820496,
+      "created_at": 1762186624.820509
+    },
+    {
+      "ip": "116.7.200.122",
+      "port": 11937,
+      "protocol": "http",
+      "username": "xmdl1cbe",
+      "password": "xmdl5787",
+      "fail_count": 0,
+      "last_used": 0.0,
+      "response_time": 0.0,
+      "expires_at": 1762186924.820496,
+      "created_at": 1762186624.8205101
+    },
+    {
+      "ip": "115.196.221.160",
+      "port": 11796,
+      "protocol": "http",
+      "username": "xmdl1cbe",
+      "password": "xmdl5787",
+      "fail_count": 0,
+      "last_used": 0.0,
+      "response_time": 0.0,
+      "expires_at": 1762186924.820496,
+      "created_at": 1762186624.8205113
+    },
+    {
+      "ip": "115.210.253.107",
+      "port": 10233,
+      "protocol": "http",
+      "username": "xmdl1cbe",
+      "password": "xmdl5787",
+      "fail_count": 0,
+      "last_used": 0.0,
+      "response_time": 0.0,
+      "expires_at": 1762186924.820496,
+      "created_at": 1762186624.8205123
+    },
+    {
+      "ip": "42.57.151.219",
+      "port": 14279,
+      "protocol": "http",
+      "username": "xmdl1cbe",
+      "password": "xmdl5787",
+      "fail_count": 0,
+      "last_used": 0.0,
+      "response_time": 0.0,
+      "expires_at": 1762186924.820496,
+      "created_at": 1762186624.8205132
+    },
+    {
+      "ip": "183.146.201.59",
+      "port": 10782,
+      "protocol": "http",
+      "username": "xmdl1cbe",
+      "password": "xmdl5787",
+      "fail_count": 0,
+      "last_used": 0.0,
+      "response_time": 0.0,
+      "expires_at": 1762186924.820496,
+      "created_at": 1762186624.8205142
+    },
+    {
+      "ip": "36.24.66.157",
+      "port": 10043,
+      "protocol": "http",
+      "username": "xmdl1cbe",
+      "password": "xmdl5787",
+      "fail_count": 0,
+      "last_used": 0.0,
+      "response_time": 0.0,
+      "expires_at": 1762186924.820496,
+      "created_at": 1762186624.8205154
+    }
+  ],
+  "last_update": 1762186624.8229158,
+  "pool_type": "direct_api"
+}

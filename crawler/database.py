@@ -232,25 +232,64 @@ class MySQLManager:
         self.Session: sessionmaker[Session] | None = None
         self._connect()
 
+    def _build_connection_uri(self) -> str:
+        """构建数据库连接URI"""
+        uri = self.config.get("uri")
+        if uri:
+            return str(uri)
+
+        username = self.config.get("username", "root")
+        password = self.config.get("password", "")
+        host = self.config.get("host", "localhost")
+        port = self.config.get("port", 3306)
+        database = self.config.get("database", "crawler_db")
+        charset = self.config.get("charset", "utf8mb4")
+
+        return f"mysql+pymysql://{username}:{password}@{host}:{port}/{database}?charset={charset}"
+
+    def _build_ssl_config(self) -> dict:
+        """构建SSL配置"""
+        ssl_disabled = self.config.get("ssl_disabled", False)
+        if ssl_disabled:
+            logger.info("MySQL SSL 连接已禁用")
+            return {}
+
+        ssl_ca = self.config.get("ssl_ca")
+        ssl_cert = self.config.get("ssl_cert")
+        ssl_key = self.config.get("ssl_key")
+        ssl_verify_cert = self.config.get("ssl_verify_cert", True)
+        ssl_verify_identity = self.config.get("ssl_verify_identity", False)
+
+        ssl_config = {}
+        if ssl_ca:
+            ssl_config["ca"] = ssl_ca
+        if ssl_cert:
+            ssl_config["cert"] = ssl_cert
+        if ssl_key:
+            ssl_config["key"] = ssl_key
+
+        if ssl_config:
+            if ssl_verify_cert and ssl_ca:
+                ssl_config["check_hostname"] = ssl_verify_identity
+            else:
+                ssl_config["check_hostname"] = False
+            logger.info(
+                f"MySQL SSL 连接已启用（CA: {ssl_ca or '未提供'}, Cert: {ssl_cert or '未提供'}, Key: {ssl_key or '未提供'}）"
+            )
+            return {"ssl": ssl_config}
+
+        logger.info("MySQL SSL 连接已启用（使用默认 SSL，不验证证书）")
+        return {"ssl": {"check_hostname": False}}
+
     def _connect(self):
         """建立连接"""
         try:
-            username = self.config.get("username", "root")
-            password = self.config.get("password", "")
-            host = self.config.get("host", "localhost")
-            port = self.config.get("port", 3306)
-            database = self.config.get("database", "crawler_db")
-            charset = self.config.get("charset", "utf8mb4")
+            uri = self._build_connection_uri()
+            connect_args = self._build_ssl_config()
 
-            # 构建连接URI
-            uri = (
-                f"mysql+pymysql://{username}:{password}@{host}:{port}/{database}?charset={charset}"
-            )
+            if not uri:
+                raise ValueError("数据库URI不能为空")
 
-            # 如果配置中有完整URI，使用它
-            uri = self.config.get("uri", uri)
-
-            # 创建引擎
             self.engine = create_engine(
                 uri,
                 poolclass=QueuePool,
@@ -258,6 +297,7 @@ class MySQLManager:
                 max_overflow=20,
                 pool_recycle=3600,
                 echo=False,
+                connect_args=connect_args,
             )
 
             # 创建Session工厂
@@ -267,7 +307,8 @@ class MySQLManager:
             with self.engine.connect() as conn:
                 conn.execute(text("SELECT 1"))
 
-            logger.info(f"MySQL连接成功: {database}")
+            database_name = self.config.get("database", "crawler_db")
+            logger.info(f"MySQL连接成功: {database_name}")
         except Exception as e:
             logger.error(f"MySQL连接失败: {e}")
             raise
@@ -299,18 +340,38 @@ class MySQLManager:
 
         Args:
             sql: SQL语句
-            params: 参数
+            params: 参数（支持 pymysql 的 %(name)s 格式）
 
         Returns:
-            执行结果
+            执行结果：
+            - SELECT 查询：返回一个 CursorWrapper 对象（支持 fetchone/fetchall）
+            - 其他查询：返回受影响的行数
         """
         try:
             if self.engine is None:
                 raise RuntimeError("数据库未初始化")
-            with self.engine.connect() as conn:
-                result = conn.execute(text(sql), params or {})
-                conn.commit()
-                return result
+            # 使用原始连接执行SQL，这样可以正确处理 %(param)s 格式的参数
+            raw_conn = self.engine.raw_connection()
+            cursor = raw_conn.cursor()
+            try:
+                # PyMySQL 支持 %(param)s 格式的命名参数
+                cursor.execute(sql, params or {})
+                raw_conn.commit()
+
+                # 如果是 SELECT 查询，返回包装后的 cursor
+                if sql.strip().upper().startswith("SELECT"):
+                    # 返回一个包装类，在关闭时自动清理连接和cursor
+                    return _CursorWrapper(cursor, raw_conn)
+                else:
+                    rowcount = cursor.rowcount
+                    cursor.close()
+                    raw_conn.close()
+                    return rowcount
+            except Exception:
+                # 发生异常时确保资源被清理
+                cursor.close()
+                raw_conn.close()
+                raise
         except Exception as e:
             logger.error(f"SQL执行失败: {e}")
             raise
@@ -329,10 +390,18 @@ class MySQLManager:
         try:
             if self.engine is None:
                 raise RuntimeError("数据库未初始化")
-            with self.engine.connect() as conn:
-                result = conn.execute(text(sql), params_list)
-                conn.commit()
+            # 使用原始连接执行批量SQL，这样可以正确处理 %(param)s 格式的参数
+            raw_conn = self.engine.raw_connection()
+            cursor = raw_conn.cursor()
+            try:
+                # PyMySQL 的 executemany 支持 %(param)s 格式
+                cursor.executemany(sql, params_list)
+                raw_conn.commit()
+                result = cursor.rowcount
                 return result
+            finally:
+                cursor.close()
+                raw_conn.close()
         except Exception as e:
             logger.error(f"批量SQL执行失败: {e}")
             raise
@@ -342,6 +411,54 @@ class MySQLManager:
         if self.engine:
             self.engine.dispose()
             logger.info("MySQL连接已关闭")
+
+
+class _CursorWrapper:
+    """Cursor包装类，用于延迟关闭连接和cursor"""
+
+    def __init__(self, cursor, connection):
+        self.cursor = cursor
+        self.connection = connection
+        self._closed = False
+
+    def fetchone(self):
+        """获取一行"""
+        if self._closed:
+            raise RuntimeError("Cursor已经关闭")
+        return self.cursor.fetchone()
+
+    def fetchall(self):
+        """获取所有行"""
+        if self._closed:
+            raise RuntimeError("Cursor已经关闭")
+        return self.cursor.fetchall()
+
+    def fetchmany(self, size=None):
+        """获取多行"""
+        if self._closed:
+            raise RuntimeError("Cursor已经关闭")
+        return self.cursor.fetchmany(size)
+
+    def close(self):
+        """关闭cursor和连接"""
+        if not self._closed:
+            self.cursor.close()
+            self.connection.close()
+            self._closed = True
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+
+    def __del__(self):
+        """析构时自动关闭"""
+        if not self._closed:
+            import contextlib
+
+            with contextlib.suppress(Exception):
+                self.close()
 
 
 class RedisManager:

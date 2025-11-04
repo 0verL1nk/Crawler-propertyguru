@@ -28,7 +28,7 @@ format: ## 格式化代码
 
 type-check: ## 运行类型检查
 	@echo "运行 mypy..."
-	mypy crawler utils
+	mypy --python-version 3.10 crawler utils
 	@echo "✓ 类型检查完成"
 
 check: lint type-check ## 运行所有检查（lint + type-check）

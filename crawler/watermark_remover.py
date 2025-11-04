@@ -3,10 +3,13 @@
 基于 magiceraser.org API
 """
 
+from __future__ import annotations
+
 import os
 import time
+from io import BytesIO
 from pathlib import Path
-from typing import Any, Optional, Union
+from typing import Any
 
 import requests
 from dotenv import load_dotenv
@@ -27,10 +30,10 @@ class WatermarkRemover:
 
     def __init__(
         self,
-        product_serial: Optional[str] = None,
-        product_code: Optional[str] = None,
-        authorization: Optional[str] = None,
-        proxy: Optional[Union[str, ProxyAdapter]] = None,
+        product_serial: str | None = None,
+        product_code: str | None = None,
+        authorization: str | None = None,
+        proxy: str | ProxyAdapter | None = None,
     ):
         """
         初始化去水印工具
@@ -71,8 +74,8 @@ class WatermarkRemover:
 
         # 配置代理适配器
         if proxy is None:
-            # 尝试从环境变量读取代理
-            proxy = os.getenv("PROXY_URL")
+            # 优先使用直连代理，不再使用住宅代理
+            proxy = os.getenv("PROXY_DIRECT_URL")
 
         if isinstance(proxy, str):
             self.proxy_adapter = ProxyAdapter(proxy)
@@ -84,12 +87,31 @@ class WatermarkRemover:
         # 创建会话
         self.session = requests.Session()
 
-        # 设置会话代理
-        proxies = self.proxy_adapter.get_proxies()
-        if proxies:
-            self.session.proxies.update(proxies)
+        # 配置会话以支持大文件上传
+        # 增加 HTTPAdapter 的 max_retries 和 pool_connections
+        from requests.adapters import HTTPAdapter
+        from urllib3.util.retry import Retry
 
-    def _get_proxy_dict(self) -> Optional[dict[str, str]]:
+        retry_strategy = Retry(
+            total=3,
+            backoff_factor=1,
+            status_forcelist=[429, 500, 502, 503, 504],
+            allowed_methods=["POST", "GET"],
+        )
+
+        adapter = HTTPAdapter(max_retries=retry_strategy, pool_connections=10, pool_maxsize=20)
+
+        self.session.mount("http://", adapter)
+        self.session.mount("https://", adapter)
+
+        # 不在这里设置会话代理，改为在每次请求时动态获取
+        # 这样并行处理时每个任务可以使用不同的IP
+        # 如果 proxy_adapter 是动态代理池，每次 get_proxies() 都会返回不同的代理
+        logger.debug(
+            f"代理适配器类型: {self.proxy_adapter.proxy_type if self.proxy_adapter else 'none'}"
+        )
+
+    def _get_proxy_dict(self) -> dict[str, str] | None:
         """
         获取代理字典
 
@@ -98,7 +120,7 @@ class WatermarkRemover:
         """
         return self.proxy_adapter.get_proxies()
 
-    def _get_headers(self, content_type: Optional[str] = None) -> dict[str, str]:
+    def _get_headers(self, content_type: str | None = None) -> dict[str, str]:
         """
         获取请求头
 
@@ -134,7 +156,62 @@ class WatermarkRemover:
 
         return headers  # type: ignore[return-value]
 
-    def create_job(self, image_path: Union[str, Path]) -> Optional[str]:
+    def _prepare_file_for_upload(self, image_path: Path) -> tuple[BytesIO, str, int]:
+        """准备文件用于上传，返回 (file_buffer, content_type, file_size)"""
+        with image_path.open("rb") as f:
+            file_content = f.read()
+
+        content_type = (
+            "image/jpeg" if image_path.suffix.lower() in [".jpg", ".jpeg"] else "image/png"
+        )
+
+        file_buffer = BytesIO(file_content)
+        file_buffer.seek(0)
+        file_size = len(file_content)
+
+        logger.info(f"图片大小: {file_size / 1024 / 1024:.2f} MB")
+        return file_buffer, content_type, file_size
+
+    def _calculate_timeout(self, file_size: int) -> tuple[int, float]:
+        """计算请求超时时间，返回 (连接超时, 读取超时)"""
+        read_timeout = max(120, file_size / 1024 / 10)
+        timeout = (10, min(read_timeout, 300))
+        logger.debug(f"请求超时设置: 连接={timeout[0]}s, 读取={timeout[1]:.1f}s")
+        return timeout
+
+    def _send_create_job_request(
+        self, files: dict, headers: dict, timeout: tuple[int, float]
+    ) -> str | None:
+        """发送创建任务请求"""
+        url = f"{self.BASE_URL}/api/magiceraser/v3/ai-image-watermark-remove-auto/create-job"
+        verify = self.proxy_adapter.get_verify() if self.proxy_adapter else True
+        logger.debug(f"SSL验证设置: verify={verify}")
+
+        proxies = None
+        if self.proxy_adapter:
+            proxies = self.proxy_adapter.get_proxies()
+            if proxies:
+                logger.debug(f"使用代理: {proxies.get('http') or proxies.get('https')}")
+
+        response = self.session.post(
+            url, files=files, headers=headers, timeout=timeout, verify=verify, proxies=proxies
+        )
+
+        response.raise_for_status()
+        result = response.json()
+
+        if result.get("code") == 100000:
+            job_id = result.get("result", {}).get("job_id")
+            if isinstance(job_id, str):
+                logger.info(f"任务创建成功，job_id: {job_id}")
+                return job_id
+            logger.error("任务创建失败: job_id 不是字符串")
+            return None
+
+        logger.error(f"任务创建失败: {result.get('message')}")
+        return None
+
+    def create_job(self, image_path: str | Path) -> str | None:
         """
         创建去水印任务
 
@@ -151,54 +228,41 @@ class WatermarkRemover:
                 logger.error(f"图片文件不存在: {image_path}")
                 return None
 
-            # 准备文件
-            with image_path.open("rb") as f:
+            file_buffer, content_type, file_size = self._prepare_file_for_upload(image_path)
+
+            try:
                 files = {
                     "original_image_file": (
                         image_path.name,
-                        f,
-                        (
-                            "image/jpeg"
-                            if image_path.suffix.lower() in [".jpg", ".jpeg"]
-                            else "image/png"
-                        ),
+                        file_buffer,
+                        content_type,
                     )
                 }
 
-                # 发送请求
-                url = (
-                    f"{self.BASE_URL}/api/magiceraser/v3/ai-image-watermark-remove-auto/create-job"
-                )
                 headers = self._get_headers()
-                # 不设置 Content-Type，让 requests 自动处理 multipart/form-data
                 headers.pop("Content-Type", None)
 
                 logger.info(f"正在创建去水印任务: {image_path.name}")
 
-                # 使用适配器的SSL验证设置
-                verify = self.proxy_adapter.get_verify() if self.proxy_adapter else False
+                timeout = self._calculate_timeout(file_size)
+                return self._send_create_job_request(files, headers, timeout)
+            finally:
+                file_buffer.close()
 
-                response = self.session.post(
-                    url, files=files, headers=headers, timeout=60, verify=verify
-                )
-
-                response.raise_for_status()
-                result = response.json()
-
-                # 解析响应
-                if result.get("code") == 100000:
-                    job_id = result.get("result", {}).get("job_id")
-                    if isinstance(job_id, str):
-                        logger.info(f"任务创建成功，job_id: {job_id}")
-                        return job_id
-                    logger.error("任务创建失败: job_id 不是字符串")
-                    return None
-                else:
-                    logger.error(f"任务创建失败: {result.get('message')}")
-                    return None
-
+        except requests.exceptions.Timeout as e:
+            logger.error(f"创建任务超时: {e}")
+            logger.error("建议：检查网络连接或增加超时时间")
+            return None
+        except requests.exceptions.ConnectionError as e:
+            logger.error(f"创建任务连接失败: {e}")
+            logger.error("建议：检查代理配置或网络连接")
+            return None
         except Exception as e:
             logger.error(f"创建任务失败: {e}")
+            logger.error(f"错误类型: {type(e).__name__}")
+            import traceback
+
+            logger.debug(f"详细错误信息: {traceback.format_exc()}")
             return None
 
     def get_job_status(self, job_id: str) -> dict[str, Any]:
@@ -215,7 +279,17 @@ class WatermarkRemover:
             url = f"{self.BASE_URL}/api/magiceraser/v2/ai-remove-object/get-job/{job_id}"
             headers = self._get_headers()
 
-            response = self.session.get(url, headers=headers, timeout=30)
+            # 使用适配器的SSL验证设置
+            verify = self.proxy_adapter.get_verify() if self.proxy_adapter else True
+
+            # 动态获取代理（每次请求都获取，确保并行时使用不同的IP）
+            proxies = None
+            if self.proxy_adapter:
+                proxies = self.proxy_adapter.get_proxies()
+
+            response = self.session.get(
+                url, headers=headers, timeout=30, verify=verify, proxies=proxies
+            )
             response.raise_for_status()
 
             result: dict[str, Any] = response.json()
@@ -227,7 +301,7 @@ class WatermarkRemover:
 
     def wait_for_completion(
         self, job_id: str, max_wait: int = 300, check_interval: int = 3
-    ) -> Optional[str]:
+    ) -> str | None:
         """
         等待任务完成
 
@@ -275,7 +349,7 @@ class WatermarkRemover:
         logger.error(f"等待超时（{max_wait}秒）")
         return None
 
-    def download_result(self, url: str, save_path: Union[str, Path]) -> bool:
+    def download_result(self, url: str, save_path: str | Path) -> bool:
         """
         下载处理后的图片
 
@@ -292,8 +366,15 @@ class WatermarkRemover:
 
             logger.info(f"正在下载图片: {url}")
 
-            verify = self.proxy_adapter.get_verify() if self.proxy_adapter else False
-            response = self.session.get(url, timeout=60, verify=verify)
+            # 使用适配器的SSL验证设置
+            verify = self.proxy_adapter.get_verify() if self.proxy_adapter else True
+
+            # 动态获取代理（每次请求都获取，确保并行时使用不同的IP）
+            proxies = None
+            if self.proxy_adapter:
+                proxies = self.proxy_adapter.get_proxies()
+
+            response = self.session.get(url, timeout=60, verify=verify, proxies=proxies)
             response.raise_for_status()
 
             with Path(save_path).open("wb") as f:
@@ -308,10 +389,10 @@ class WatermarkRemover:
 
     def remove_watermark(
         self,
-        image_path: Union[str, Path],
-        output_path: Optional[Union[str, Path]] = None,
+        image_path: str | Path,
+        output_path: str | Path | None = None,
         max_wait: int = 300,
-    ) -> Optional[str]:
+    ) -> str | None:
         """
         去除图片水印（完整流程）
 
@@ -365,13 +446,13 @@ class WatermarkRemover:
 
 # 便捷函数
 def remove_watermark(
-    image_path: Union[str, Path],
-    output_path: Optional[Union[str, Path]] = None,
-    product_serial: Optional[str] = None,
-    product_code: Optional[str] = None,
-    authorization: Optional[str] = None,
-    proxy: Optional[Union[str, ProxyAdapter]] = None,
-) -> Optional[str]:
+    image_path: str | Path,
+    output_path: str | Path | None = None,
+    product_serial: str | None = None,
+    product_code: str | None = None,
+    authorization: str | None = None,
+    proxy: str | ProxyAdapter | None = None,
+) -> str | None:
     """
     去除图片水印（便捷函数）
 

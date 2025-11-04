@@ -2,11 +2,16 @@
 爬虫核心引擎
 """
 
+from __future__ import annotations
+
 import asyncio
 import random
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Any, Callable, Optional, Protocol, Union, cast
+from typing import TYPE_CHECKING, Any, Protocol, cast
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 import aiohttp
 import requests
@@ -48,9 +53,9 @@ class Response:
         self.content = content
         self.headers = headers
         self.encoding = encoding
-        self._text: Optional[str] = None
-        self._soup: Optional[BeautifulSoup] = None
-        self._json: Optional[dict[Any, Any]] = None
+        self._text: str | None = None
+        self._soup: BeautifulSoup | None = None
+        self._json: dict[Any, Any] | None = None
 
     @property
     def text(self) -> str:
@@ -92,7 +97,7 @@ class Response:
 class Spider:
     """爬虫主类"""
 
-    def __init__(self, config: Union[Config, dict]):
+    def __init__(self, config: Config | dict):
         """
         初始化爬虫
 
@@ -120,10 +125,10 @@ class Spider:
         self.ua = UserAgent() if self.rotate_user_agent else None
 
         # 初始化组件
-        self.proxy_manager: Optional[ProxyManager] = None
-        self.db_manager: Optional[DatabaseManager] = None
-        self.s3_manager: Optional[StorageManagerProtocol] = None
-        self.proxy_adapter: Optional[Any] = None
+        self.proxy_manager: ProxyManager | None = None
+        self.db_manager: DatabaseManager | None = None
+        self.s3_manager: StorageManagerProtocol | None = None
+        self.proxy_adapter: Any | None = None
 
         self._init_components()
 
@@ -207,7 +212,7 @@ class Spider:
 
         return headers
 
-    def _get_proxy(self) -> Optional[dict]:
+    def _get_proxy(self) -> dict | None:
         """获取代理"""
         if not self.proxy_manager:
             return None
@@ -230,7 +235,7 @@ class Spider:
             time.sleep(delay_time)
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
-    def fetch(self, url: str, method: str = "GET", **kwargs) -> Optional[Response]:
+    def fetch(self, url: str, method: str = "GET", **kwargs) -> Response | None:
         """
         发送HTTP请求
 
@@ -242,7 +247,7 @@ class Spider:
         Returns:
             Response对象
         """
-        proxy_dict: Optional[dict[str, str]] = None
+        proxy_dict: dict[str, str] | None = None
         try:
             # 准备参数
             headers = kwargs.pop("headers", {})
@@ -296,17 +301,17 @@ class Spider:
 
             raise
 
-    def get(self, url: str, **kwargs) -> Optional[Response]:
+    def get(self, url: str, **kwargs) -> Response | None:
         """GET请求"""
         return self.fetch(url, "GET", **kwargs)
 
-    def post(self, url: str, **kwargs) -> Optional[Response]:
+    def post(self, url: str, **kwargs) -> Response | None:
         """POST请求"""
         return self.fetch(url, "POST", **kwargs)
 
     async def async_fetch(
         self, session: aiohttp.ClientSession, url: str, method: str = "GET", **kwargs
-    ) -> Optional[Response]:
+    ) -> Response | None:
         """
         异步HTTP请求
 
@@ -356,7 +361,7 @@ class Spider:
             logger.error(f"异步请求失败: {url}, 错误: {e}")
             return None
 
-    async def async_crawl(self, urls: list[str], callback: Optional[Callable] = None):
+    async def async_crawl(self, urls: list[str], callback: Callable | None = None):
         """
         异步批量爬取
 
@@ -385,8 +390,8 @@ class Spider:
     def crawl(
         self,
         urls: list[str],
-        callback: Optional[Callable] = None,
-        max_workers: Optional[int] = None,
+        callback: Callable | None = None,
+        max_workers: int | None = None,
     ):
         """
         多线程批量爬取
@@ -410,7 +415,7 @@ class Spider:
                 except Exception as e:
                     logger.error(f"爬取失败: {url}, 错误: {e}")
 
-    def start(self, urls: list[str], callback: Optional[Callable] = None, async_mode: bool = False):
+    def start(self, urls: list[str], callback: Callable | None = None, async_mode: bool = False):
         """
         开始爬取
 
@@ -433,7 +438,7 @@ class Spider:
             elapsed_time = time.time() - start_time
             logger.info(f"爬取完成，耗时: {elapsed_time:.2f}秒")
 
-    def save_to_db(self, data: Union[dict, list[dict]], collection: Optional[str] = None):
+    def save_to_db(self, data: dict | list[dict], collection: str | None = None):
         """
         保存数据到数据库
 
@@ -463,7 +468,7 @@ class Spider:
         except Exception as e:
             logger.error(f"数据保存失败: {e}")
 
-    def save_to_s3(self, data: Union[str, bytes], s3_key: str):
+    def save_to_s3(self, data: str | bytes, s3_key: str):
         """
         保存数据到S3
 

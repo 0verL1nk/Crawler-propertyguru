@@ -4,10 +4,12 @@
 支持SSL证书（Bright Data等需要证书的代理服务）
 """
 
+from __future__ import annotations
+
 import os
 import ssl
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional, Protocol, Union, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 from .logger import get_logger
 
@@ -28,7 +30,7 @@ class ProxyObject(Protocol):
 class ProxyManagerProtocol(Protocol):
     """代理管理器协议"""
 
-    def get_proxy(self) -> Optional[ProxyObject]:
+    def get_proxy(self) -> ProxyObject | None:
         """获取代理对象"""
         ...
 
@@ -51,7 +53,7 @@ class ResidentialProxy:
     实现动态IP轮换，避免被封禁。适合大规模爬取和批量处理任务。
     """
 
-    def __init__(self, proxy_url: str, ssl_cert_path: Optional[str] = None):
+    def __init__(self, proxy_url: str, ssl_cert_path: str | None = None):
         """
         初始化静态代理
 
@@ -77,11 +79,11 @@ class ResidentialProxy:
         """
         self.proxy_url = proxy_url
         self.ssl_cert_path = ssl_cert_path or os.getenv("PROXY_SSL_CERT")
-        self.ssl_context: Optional[ssl.SSLContext] = None
+        self.ssl_context: ssl.SSLContext | None = None
 
         # 初始化属性
-        self.username: Optional[str] = None
-        self.password: Optional[str] = None
+        self.username: str | None = None
+        self.password: str | None = None
         self.protocol: str = "http"
         self.host: str = ""
         self.port: int = 8080
@@ -177,7 +179,7 @@ class ResidentialProxy:
 
         return urllib.request.ProxyHandler(self.get_proxies())
 
-    def get_ssl_context(self) -> Optional[ssl.SSLContext]:
+    def get_ssl_context(self) -> ssl.SSLContext | None:
         """
         获取SSL上下文
 
@@ -186,17 +188,23 @@ class ResidentialProxy:
         """
         return self.ssl_context
 
-    def get_requests_verify(self) -> Union[bool, str]:
+    def get_requests_verify(self) -> bool | str:
         """
         获取requests的verify参数
 
         Returns:
-            - 如果有SSL证书，返回证书路径
-            - 如果没有，返回False（禁用SSL验证）
+            - 如果有SSL证书且是BrightData代理，返回证书路径
+            - 否则返回False（禁用SSL验证）
         """
-        if self.ssl_cert_path and Path(self.ssl_cert_path).exists():
+        # 只对 BrightData 代理使用 SSL 证书
+        # BrightData 代理的标识：brd.superproxy.io
+        is_brightdata = "brd.superproxy.io" in self.proxy_url.lower()
+
+        if is_brightdata and self.ssl_cert_path and Path(self.ssl_cert_path).exists():
             return str(self.ssl_cert_path)
-        return False  # Bright Data代理需要禁用默认验证或使用自定义证书
+
+        # 对于非 BrightData 代理（如直连代理），禁用 SSL 验证
+        return False
 
     def test(self, test_url: str = "https://httpbin.org/ip", timeout: int = 10) -> bool:
         """
@@ -252,8 +260,8 @@ class ProxyAdapter:
 
     def __init__(
         self,
-        proxy: Union[str, "ResidentialProxy", "ProxyManager", None] = None,
-        ssl_cert_path: Optional[str] = None,
+        proxy: str | ResidentialProxy | ProxyManager | None = None,
+        ssl_cert_path: str | None = None,
     ):
         """
         初始化代理适配器
@@ -278,7 +286,7 @@ class ProxyAdapter:
             >>> pm = ProxyManager(config)
             >>> adapter = ProxyAdapter(pm)
         """
-        self.proxy: Union[ResidentialProxy, ProxyManagerProtocol, None] = None
+        self.proxy: ResidentialProxy | ProxyManagerProtocol | None = None
         self.proxy_type = "none"
 
         if proxy is None:
@@ -300,7 +308,7 @@ class ProxyAdapter:
 
         logger.info(f"代理适配器初始化: {self.proxy_type}")
 
-    def get_proxies(self) -> Optional[dict[str, str]]:
+    def get_proxies(self) -> dict[str, str] | None:
         """
         获取代理字典
 
@@ -322,7 +330,7 @@ class ProxyAdapter:
             return None
         return None
 
-    def get_ssl_context(self) -> Optional[ssl.SSLContext]:
+    def get_ssl_context(self) -> ssl.SSLContext | None:
         """
         获取SSL上下文（仅静态代理支持）
 
@@ -333,7 +341,7 @@ class ProxyAdapter:
             return self.proxy.get_ssl_context()
         return None
 
-    def get_verify(self) -> Union[bool, str]:
+    def get_verify(self) -> bool | str:
         """
         获取requests的verify参数
 
@@ -388,8 +396,8 @@ class ProxyAdapter:
 
 
 def create_proxy(
-    proxy_config: Union[str, dict, None], ssl_cert_path: Optional[str] = None
-) -> Optional[ProxyAdapter]:
+    proxy_config: str | dict | None, ssl_cert_path: str | None = None
+) -> ProxyAdapter | None:
     """
     创建代理适配器（工厂函数）
 

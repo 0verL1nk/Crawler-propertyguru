@@ -3,13 +3,28 @@
 # 代理配置
 proxy:
   enabled: true
-  # 代理池类型: file, api, redis
-  pool_type: "file"
-  # 代理文件路径
+  # 代理池类型: file, api, direct_api
+  # file: 从文件加载代理列表
+  # api: 通用API格式（返回 {"proxies": [...]}）
+  # direct_api: 直连代理API（如熊猫代理，返回 {"code": "0", "obj": [...]}）
+  pool_type: "direct_api"
+  # 代理文件路径（pool_type=file时使用）
   proxy_file: "proxies.txt"
-  # 代理API接口（如使用第三方代理服务）
+  # 通用代理API配置（pool_type=api时使用）
   api_url: ""
   api_key: ""
+  # 直连代理API配置（pool_type=direct_api时使用）
+  # 注意：隐私信息（secret、order_no）请放在环境变量中
+  api_base_url: ""  # API基础URL，例如: http://route.xiongmaodaili.com/xiongmao-web/api/glip
+  secret: ""  # 建议使用环境变量 PROXY_DIRECT_SECRET
+  order_no: ""  # 建议使用环境变量 PROXY_DIRECT_ORDER_NO
+  count: 10  # 获取代理数量
+  proxy_type: 1  # 代理类型（1=直连）
+  return_account: 2  # 是否返回账号密码（2=返回）
+  ip_ttl: 300  # IP有效期（秒），默认5分钟，避免浪费IP
+  min_proxy_count: 3  # 最小代理数量，低于此值时会自动刷新
+  api_request_interval: 1.0  # API请求间隔（秒），避免超过频率限制
+  proxy_pool_file: "proxy_pool.json"  # IP池持久化文件路径（支持中断续用）
   # 代理验证URL
   test_url: "https://www.httpbin.org/ip"
   # 最大失败次数
@@ -20,7 +35,7 @@ proxy:
 # 数据库配置
 database:
   # 数据库类型: mysql, mongodb, sqlite
-  type: "mongodb"
+  type: "mysql"
 
   # MongoDB配置
   mongodb:
@@ -38,6 +53,15 @@ database:
     username: "root"
     password: ""
     charset: "utf8mb4"
+    # SSL配置（生产环境建议启用）
+    ssl_disabled: false  # 是否禁用SSL（默认false，即启用SSL）
+    ssl_ca: "cert/db/isrgrootx1.pem"  # CA证书文件路径（用于验证服务器证书）
+    ssl_cert: ""  # 客户端证书文件路径（可选，例如: /path/to/client-cert.pem）
+    ssl_key: ""  # 客户端私钥文件路径（可选，例如: /path/to/client-key.pem）
+    ssl_verify_cert: true  # 是否验证服务器证书（默认true）
+    ssl_verify_identity: false  # 是否验证服务器身份（默认false）
+    # 如果提供了完整连接URI，可以使用 uri 字段（SSL参数通过上述配置传递）
+    # uri: "mysql+pymysql://user:pass@host:port/db?charset=utf8mb4"
 
   # Redis配置（用于缓存和队列）
   redis:
@@ -46,25 +70,22 @@ database:
     db: 0
     password: ""
 
-# 对象存储配置（支持S3和七牛云）
+# 对象存储配置（支持S3和兼容S3的服务，如七牛云）
 s3:
   enabled: true
-  # 存储类型: s3, qiniu
+  # 存储类型: s3
+  # s3: AWS S3或兼容S3的服务（如七牛云S3兼容模式、MinIO等）
   type: "s3"
 
-  # S3配置（当 type=s3 时使用）
+  # S3配置
+  # 适用于：AWS S3、七牛云S3兼容模式、MinIO等兼容S3的服务
   aws_access_key_id: ""
   aws_secret_access_key: ""
   bucket_name: "crawler-data"
-  region_name: "us-east-1"
-  endpoint_url: ""  # 可选，用于兼容其他S3服务
+  region_name: "cn-south-1"  # 七牛云使用: cn-east-1, cn-north-1, cn-south-1等
+  endpoint_url: "https://s3.cn-south-1.qiniucs.com"  # 七牛云S3兼容模式示例: https://s3.cn-east-1.qiniucs.com
   prefix: "crawled_data/"
   encrypt: true
-
-  # 七牛云配置（当 type=qiniu 时使用）
-  access_key: ""
-  secret_key: ""
-  bucket_domain: ""  # 存储空间域名，用于生成下载URL
 
 # 爬虫配置
 crawler:
@@ -84,12 +105,15 @@ crawler:
   rotate_user_agent: true
   # 是否使用代理
   use_proxy: true
+  # 直连IP时的配置（当 use_proxy=false 或 proxy.enabled=false 时生效）
+  direct_ip_limit_per_page: 1  # 每页最多爬取的房源数（直连IP时，默认1个）
+  direct_ip_delay: 5  # 每个房源之间的延迟（秒），直连IP时使用，避免频率过高
   # 是否验证SSL证书
   verify_ssl: true
 
 # 日志配置
 logging:
-  level: "INFO"
+  level: "DEBUG"
   # 日志文件路径
   file: "logs/crawler.log"
   # 日志轮转大小（MB）
@@ -109,3 +133,11 @@ security:
   encrypt_data: false
   # 加密密钥（请使用环境变量）
   encryption_key: ""
+
+# 去水印配置
+watermark_remover:
+  enabled: true
+  # 配置从环境变量读取:
+  # WATERMARK_REMOVER_PRODUCT_SERIAL
+  # WATERMARK_REMOVER_PRODUCT_CODE
+  # WATERMARK_REMOVER_AUTHORIZATION

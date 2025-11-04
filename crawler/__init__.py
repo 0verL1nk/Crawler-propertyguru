@@ -9,7 +9,7 @@ __author__ = "Your Name"
 from .browser import RemoteBrowser, scrape_with_browser
 from .config import Config
 from .spider import Spider
-from .storage import QiniuManager, S3Manager, StorageManagerProtocol, create_storage_manager
+from .storage import S3Manager, StorageManagerProtocol, create_storage_manager
 
 __all__ = [
     "Spider",
@@ -17,7 +17,6 @@ __all__ = [
     "RemoteBrowser",
     "scrape_with_browser",
     "S3Manager",
-    "QiniuManager",
     "create_storage_manager",
     "StorageManagerProtocol",
 ]
