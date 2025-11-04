@@ -5,11 +5,13 @@
 
 from __future__ import annotations
 
+import html
 import re
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urljoin
 
+from bs4 import BeautifulSoup
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
 
@@ -18,9 +20,28 @@ if TYPE_CHECKING:
 
 from utils.logger import get_logger
 
-from .models import FAQ, ListingInfo, MortgageInfo, PropertyDetails
+from .models import ListingInfo, PropertyDetails
 
 logger = get_logger("Parsers")
+
+
+def _clean_text(text: str | None) -> str | None:
+    """
+    清理文本：解码HTML实体，去除多余空白字符
+
+    Args:
+        text: 原始文本
+
+    Returns:
+        清理后的文本
+    """
+    if not text:
+        return None
+    # 解码HTML实体（如 &amp; &lt; &gt; &#39; &nbsp; 等）
+    cleaned = html.unescape(text.strip())
+    # 将多个空白字符替换为单个空格
+    cleaned = re.sub(r"\s+", " ", cleaned)
+    return cleaned.strip() if cleaned else None
 
 
 class TextNotEmpty:
@@ -91,7 +112,7 @@ class ListingPageParser:
 
     def extract_listing_cards(self) -> list[WebElement]:
         """
-        提取所有房产卡片元素
+        提取所有房产卡片元素（保留向后兼容）
 
         Returns:
             房产卡片元素列表
@@ -113,6 +134,146 @@ class ListingPageParser:
         except Exception as e:
             logger.error(f"提取房产卡片失败: {e}")
             return []
+
+    def extract_listing_cards_html(self) -> list[str]:
+        """
+        提取所有房产卡片的HTML内容（优化版本，一次性获取所有卡片HTML，避免重复访问DOM）
+
+        Returns:
+            房产卡片HTML字符串列表
+        """
+        try:
+            # 查找 search-result-root
+            root = self.browser.find_element(By.CSS_SELECTOR, "div.search-result-root")
+            if not root:
+                logger.warning("未找到搜索结果根元素")
+                return []
+
+            # 查找所有 da-id="parent-listing-card-v2-regular" 的div
+            cards: list[WebElement] = root.find_elements(
+                By.CSS_SELECTOR, 'div[da-id="parent-listing-card-v2-regular"]'
+            )
+            logger.info(f"找到 {len(cards)} 个房产卡片，开始缓存HTML内容...")
+
+            # 一次性获取所有卡片的outerHTML
+            cards_html = []
+            for idx, card in enumerate(cards, 1):
+                try:
+                    html = card.get_attribute("outerHTML")
+                    if html:
+                        cards_html.append(html)
+                    else:
+                        logger.warning(f"第 {idx} 个卡片获取HTML失败")
+                except Exception as e:
+                    logger.warning(f"获取第 {idx} 个卡片HTML失败: {e}")
+                    continue
+
+            logger.info(f"成功缓存 {len(cards_html)} 个卡片的HTML内容")
+            return cards_html
+
+        except Exception as e:
+            logger.error(f"提取房产卡片HTML失败: {e}")
+            return []
+
+    def _extract_price_from_html(self, card_elem) -> Decimal | None:
+        """从HTML元素提取价格"""
+        try:
+            price_elem = card_elem.find(attrs={"da-id": "listing-card-v2-price"})
+            if not price_elem:
+                return None
+            price_text = price_elem.get_text(strip=True)
+            if not price_text:
+                return None
+            price_match = re.search(r"[\d,]+", price_text.replace(",", ""))
+            if price_match:
+                return Decimal(price_match.group().replace(",", ""))
+        except Exception:
+            pass
+        return None
+
+    def _extract_price_per_sqft_from_html(self, card_elem) -> Decimal | None:
+        """从HTML元素提取每平方英尺价格"""
+        try:
+            psf_elem = card_elem.find(attrs={"da-id": "listing-card-v2-psf"})
+            if not psf_elem:
+                return None
+            psf_text = psf_elem.get_text(strip=True)
+            if not psf_text:
+                return None
+            psf_match = re.search(r"[\d,]+\.?\d*", psf_text)
+            if psf_match:
+                psf_value_str = psf_match.group().replace(",", "")
+                return Decimal(psf_value_str)
+        except Exception:
+            pass
+        return None
+
+    def _extract_int_from_html(self, card_elem, selector: str) -> int | None:
+        """从HTML元素提取整数"""
+        try:
+            elem = card_elem.select_one(selector)
+            if elem:
+                text = elem.get_text(strip=True)
+                if text:
+                    return int(text)
+        except Exception:
+            pass
+        return None
+
+    def _extract_decimal_from_html(self, card_elem, selector: str) -> Decimal | None:
+        """从HTML元素提取小数"""
+        try:
+            elem = card_elem.select_one(selector)
+            if elem:
+                text = elem.get_text(strip=True)
+                if text:
+                    # 提取数字部分（去除单位如sqft）
+                    match = re.search(r"[\d,]+\.?\d*", text.replace(",", ""))
+                    if match:
+                        return Decimal(match.group().replace(",", ""))
+        except Exception:
+            pass
+        return None
+
+    def _extract_build_year_from_html(self, card_elem) -> int | None:
+        """从HTML元素提取建造年份"""
+        try:
+            build_year_elem = card_elem.find(attrs={"da-id": "listing-card-v2-build-year"})
+            if build_year_elem:
+                text = build_year_elem.get_text(strip=True)
+                if text:
+                    # 提取年份数字
+                    match = re.search(r"\b(19|20)\d{2}\b", text)
+                    if match:
+                        return int(match.group())
+        except Exception:
+            pass
+        return None
+
+    def _extract_mrt_info_from_html(self, card_elem) -> tuple[str | None, int | None]:
+        """从HTML元素提取MRT信息"""
+        try:
+            mrt_elem = card_elem.find(attrs={"da-id": "listing-card-v2-mrt"})
+            if not mrt_elem:
+                return None, None
+            mrt_text = mrt_elem.get_text(strip=True)
+            if not mrt_text:
+                return None, None
+
+            mrt_distance_m = None
+            distance_match = re.search(r"(\d+)\s*m", mrt_text)
+            if distance_match:
+                mrt_distance_m = int(distance_match.group(1))
+
+            mrt_station = None
+            station_match = re.search(r"from\s+(.+)", mrt_text)
+            if station_match:
+                mrt_station = station_match.group(1).strip()
+
+            return mrt_station, mrt_distance_m
+        except Exception:
+            pass
+        return None, None
 
     def _extract_listing_id(self, card: WebElement) -> int | None:
         """提取房源ID"""
@@ -205,10 +366,13 @@ class ListingPageParser:
                 return None
 
             logger.debug(f"每平方英尺价格文本: {psf_text}")
-            # 提取数字（去除 S$ 和 psf）
-            psf_match = re.search(r"[\d.]+", psf_text)
+            # 提取数字（去除 S$ 和 psf，支持逗号分隔的数字）
+            # 匹配模式：数字可能包含逗号和小数点，如 2,408.38
+            psf_match = re.search(r"[\d,]+\.?\d*", psf_text)
             if psf_match:
-                psf_value = Decimal(psf_match.group())
+                # 去除逗号后转换为 Decimal
+                psf_value_str = psf_match.group().replace(",", "")
+                psf_value = Decimal(psf_value_str)
                 logger.debug(f"提取的每平方英尺价格: {psf_value}")
                 return psf_value
             logger.debug(f"每平方英尺价格文本中未找到数字: {psf_text}")
@@ -354,6 +518,146 @@ class ListingPageParser:
         except Exception:
             pass
         return None, None
+
+    def parse_listing_card_html(self, card_html: str) -> ListingInfo | None:  # noqa: C901
+        """
+        解析单个房产卡片的HTML（优化版本，使用BeautifulSoup在内存中解析，避免重复访问DOM）
+
+        Args:
+            card_html: 房产卡片HTML字符串
+
+        Returns:
+            ListingInfo对象，如果解析失败返回None
+        """
+        try:
+            soup = BeautifulSoup(card_html, "html.parser")
+            card_elem = soup.find("div", {"da-id": "parent-listing-card-v2-regular"})
+            if not card_elem:
+                logger.debug("HTML中未找到卡片元素")
+                return None
+
+            logger.debug("开始提取 listing_id...")
+            listing_id = None
+            listing_id_str = card_elem.get("da-listing-id")
+            if listing_id_str:
+                # 确保是字符串类型（BeautifulSoup的get可能返回list）
+                listing_id_str_val: str | None = None
+                if isinstance(listing_id_str, str):
+                    listing_id_str_val = listing_id_str
+                elif isinstance(listing_id_str, list) and listing_id_str:
+                    listing_id_str_val = str(listing_id_str[0])
+
+                if listing_id_str_val:
+                    try:
+                        listing_id = int(listing_id_str_val)
+                    except ValueError:
+                        logger.warning(f"无效的listing_id: {listing_id_str_val}")
+            if not listing_id:
+                logger.debug("listing_id 提取失败，返回 None")
+                return None
+            logger.debug(f"listing_id: {listing_id}")
+
+            logger.debug("开始提取 detail_url...")
+            detail_url: str | None = None
+            footer_link = card_elem.find("a", class_="card-footer")
+            if footer_link:
+                href_value = footer_link.get("href")
+                if href_value:
+                    # 确保是字符串类型（BeautifulSoup的get可能返回list）
+                    href_str: str | None = None
+                    if isinstance(href_value, str):
+                        href_str = href_value
+                    elif isinstance(href_value, list) and href_value:
+                        href_str = str(href_value[0])
+
+                    if href_str:
+                        detail_url = urljoin("https://www.propertyguru.com.sg", href_str)
+            logger.debug(f"detail_url: {detail_url}")
+
+            logger.debug("开始提取 price...")
+            price = self._extract_price_from_html(card_elem)
+            logger.debug(f"price: {price}")
+
+            logger.debug("开始提取 price_per_sqft...")
+            price_per_sqft = self._extract_price_per_sqft_from_html(card_elem)
+            logger.debug(f"price_per_sqft: {price_per_sqft}")
+
+            logger.debug("开始提取 title...")
+            title_elem = card_elem.find("h3", {"da-id": "listing-card-v2-title"})
+            if not title_elem:
+                title_elem = card_elem.find(attrs={"da-id": "listing-card-v2-title"})
+            title = title_elem.get_text(strip=True) if title_elem else None
+            logger.debug(f"title: {title}")
+
+            logger.debug("开始提取 location...")
+            location_elem = card_elem.find("p", class_="listing-address")
+            location = location_elem.get_text(strip=True) if location_elem else None
+            logger.debug(f"location: {location}")
+
+            logger.debug("开始提取 bedrooms...")
+            bedrooms = self._extract_int_from_html(card_elem, '[da-id="listing-card-v2-bedrooms"]')
+            logger.debug(f"bedrooms: {bedrooms}")
+
+            logger.debug("开始提取 bathrooms...")
+            bathrooms = self._extract_int_from_html(
+                card_elem, '[da-id="listing-card-v2-bathrooms"]'
+            )
+            logger.debug(f"bathrooms: {bathrooms}")
+
+            logger.debug("开始提取 area_sqft...")
+            area_sqft = self._extract_decimal_from_html(card_elem, '[da-id="listing-card-v2-area"]')
+            logger.debug(f"area_sqft: {area_sqft}")
+
+            logger.debug("开始提取 unit_type...")
+            unit_type_elem = card_elem.find(attrs={"da-id": "listing-card-v2-unit-type"})
+            unit_type = unit_type_elem.get_text(strip=True) if unit_type_elem else None
+            logger.debug(f"unit_type: {unit_type}")
+
+            logger.debug("开始提取 tenure...")
+            tenure_elem = card_elem.find(attrs={"da-id": "listing-card-v2-tenure"})
+            tenure = tenure_elem.get_text(strip=True) if tenure_elem else None
+            logger.debug(f"tenure: {tenure}")
+
+            logger.debug("开始提取 build_year...")
+            build_year = self._extract_build_year_from_html(card_elem)
+            logger.debug(f"build_year: {build_year}")
+
+            logger.debug("开始提取 mrt_info...")
+            mrt_station, mrt_distance_m = self._extract_mrt_info_from_html(card_elem)
+            logger.debug(f"mrt_station: {mrt_station}, mrt_distance_m: {mrt_distance_m}")
+
+            logger.debug("开始提取 listed_age...")
+            listed_age_elem = card_elem.find(attrs={"da-id": "listing-card-v2-recency"})
+            if listed_age_elem:
+                span_elem = listed_age_elem.find("span")
+                listed_age = span_elem.get_text(strip=True) if span_elem else None
+            else:
+                listed_age = None
+            logger.debug(f"listed_age: {listed_age}")
+
+            logger.debug("开始创建 ListingInfo 对象...")
+
+            return ListingInfo(
+                listing_id=listing_id,
+                title=title,
+                price=price,
+                price_per_sqft=price_per_sqft,
+                bedrooms=bedrooms,
+                bathrooms=bathrooms,
+                area_sqft=area_sqft,
+                unit_type=unit_type,
+                tenure=tenure,
+                build_year=build_year,
+                mrt_station=mrt_station,
+                mrt_distance_m=mrt_distance_m,
+                location=location,
+                listed_age=listed_age,
+                url=detail_url,
+            )
+
+        except Exception as e:
+            logger.error(f"解析房产卡片HTML失败: {e}", exc_info=True)
+            return None
 
     def parse_listing_card(self, card: WebElement) -> ListingInfo | None:
         """
@@ -665,8 +969,10 @@ class DetailPageParser:
     def _extract_table_property_details(self, property_details_dict: dict):
         """从表格中提取Property details"""
         try:
+            logger.debug("查找Property details表格")
             table = self.browser.find_element(By.CSS_SELECTOR, '[da-id="property-details"] table')
             rows = table.find_elements(By.CSS_SELECTOR, "tr.row")
+            logger.debug(f"找到 {len(rows)} 行数据")
 
             for row in rows:
                 cells = row.find_elements(By.CSS_SELECTOR, "td.meta-table__item-wrapper")
@@ -683,28 +989,40 @@ class DetailPageParser:
                         alt = icon.get_attribute("alt") or ""
                         text = value_elem.text.strip()
                         self._add_to_property_dict(property_details_dict, alt, text)
-                    except Exception:
+                        logger.debug(f"提取到字段: {alt} = {text[:50] if len(text) > 50 else text}")
+                    except Exception as e:
+                        logger.debug(f"解析表格单元格失败: {e}")
                         continue
         except Exception as e:
-            logger.debug(f"从表格提取Property details失败: {e}")
+            logger.debug(f"从表格提取Property details失败: {e}", exc_info=True)
 
     def _extract_modal_property_details(self, property_details_dict: dict):
         """从模态框中提取Property details"""
         modal_opened = False
         try:
-            see_more_btn = self.browser.find_element(
+            # 使用 find_elements 检查按钮是否存在
+            logger.debug("查找 See all details 按钮")
+            see_more_btns = self.browser.find_elements(
                 By.CSS_SELECTOR, '[da-id="meta-table-see-more-btn"]'
             )
-            if not see_more_btn or not self._click_modal_button(
+            if not see_more_btns:
+                logger.debug("未找到 See all details 按钮，跳过模态框提取")
+                return
+
+            logger.debug("找到 See all details 按钮，尝试点击")
+            if not self._click_modal_button(
                 '[da-id="meta-table-see-more-btn"]', '[da-id="property-details-modal-body"]'
             ):
+                logger.debug("点击 See all details 按钮失败")
                 return
 
             modal_opened = True
+            logger.debug("模态框已打开，开始提取数据")
             modal_body = self.browser.find_element(
                 By.CSS_SELECTOR, '[da-id="property-details-modal-body"]'
             )
             wrappers = modal_body.find_elements(By.CSS_SELECTOR, ".property-modal-body-wrapper")
+            logger.debug(f"找到 {len(wrappers)} 个模态框wrapper")
 
             for wrapper in wrappers:
                 try:
@@ -716,15 +1034,19 @@ class DetailPageParser:
                     alt = icon.get_attribute("alt") or ""
                     text = value_elem.text.strip()
                     self._add_to_property_dict(property_details_dict, alt, text)
+                    logger.debug(
+                        f"从模态框提取到字段: {alt} = {text[:50] if len(text) > 50 else text}"
+                    )
                 except Exception as e:
                     logger.debug(f"解析modal wrapper失败: {e}")
                     continue
 
         except Exception as e:
-            logger.debug(f"提取模态框Property details失败: {e}")
+            logger.debug(f"提取模态框Property details失败: {e}", exc_info=True)
         finally:
             # 确保模态框被关闭
             if modal_opened:
+                logger.debug("关闭Property details模态框")
                 self._close_modal()
 
     def _add_to_property_dict(self, property_details_dict: dict, alt: str, text: str):
@@ -747,19 +1069,29 @@ class DetailPageParser:
         try:
             listing_id = self._extract_listing_id_from_url()
             if not listing_id:
+                logger.warning("无法从URL提取listing_id，跳过Property details提取")
                 return None
 
+            logger.debug(f"开始提取Property details，listing_id: {listing_id}")
             details = PropertyDetails(listing_id=listing_id)
             property_details_dict: dict[str, Any] = {}
 
+            logger.debug("开始从表格提取Property details")
             self._extract_table_property_details(property_details_dict)
+            logger.debug(f"表格提取完成，提取到 {len(property_details_dict)} 个字段")
+
+            logger.debug("开始从模态框提取Property details")
             self._extract_modal_property_details(property_details_dict)
+            logger.debug(f"模态框提取完成，总共提取到 {len(property_details_dict)} 个字段")
 
             details.property_details = property_details_dict
+            logger.info(
+                f"Property details提取成功，listing_id: {listing_id}, 字段数: {len(property_details_dict)}"
+            )
             return details
 
         except Exception as e:
-            logger.error(f"提取Property details失败: {e}")
+            logger.error(f"提取Property details失败: {e}", exc_info=True)
             return None
 
     def _extract_basic_description(self, widget) -> tuple[str | None, str | None]:
@@ -767,16 +1099,18 @@ class DetailPageParser:
         title = None
         try:
             title_elem = widget.find_element(By.CSS_SELECTOR, "h3.subtitle")
-            title = title_elem.text.strip()
-        except Exception:
-            pass
+            title = _clean_text(title_elem.text)
+            logger.debug(f"提取到基本标题: {title[:50] if title else None}")
+        except Exception as e:
+            logger.debug(f"提取基本标题失败: {e}")
 
         description = None
         try:
             desc_elem = widget.find_element(By.CSS_SELECTOR, "div.description")
-            description = desc_elem.text.strip()
-        except Exception:
-            pass
+            description = _clean_text(desc_elem.text)
+            logger.debug(f"提取到基本描述，长度: {len(description) if description else 0}")
+        except Exception as e:
+            logger.debug(f"提取基本描述失败: {e}")
 
         return title, description
 
@@ -784,26 +1118,37 @@ class DetailPageParser:
         """从模态框提取完整描述"""
         modal_opened = True  # 调用此方法时模态框已经打开
         try:
+            logger.debug("开始从模态框提取完整描述")
             modal_body = self.browser.find_element(By.CSS_SELECTOR, "div.description-modal-body")
 
             title = None
             try:
                 subtitle = modal_body.find_element(By.CSS_SELECTOR, "h3.subtitle")
-                title = subtitle.text.strip()
-            except Exception:
-                pass
+                title = _clean_text(subtitle.text)
+                logger.debug(f"从模态框提取到标题: {title[:50] if title else None}")
+            except Exception as e:
+                logger.debug(f"从模态框提取标题失败: {e}")
 
-            description = modal_body.text.strip()
-            if title and description.startswith(title):
+            # 获取模态框的完整文本
+            description = _clean_text(modal_body.text)
+            logger.debug(f"模态框完整文本长度: {len(description) if description else 0}")
+
+            # 如果标题存在且描述以标题开头，移除标题部分
+            if title and description and description.startswith(title):
                 description = description[len(title) :].strip()
+                logger.debug(f"移除标题后的描述长度: {len(description)}")
 
+            logger.info(
+                f"模态框描述提取完成 - title长度: {len(title) if title else 0}, description长度: {len(description) if description else 0}"
+            )
             return title, description
         except Exception as e:
-            logger.error(f"提取完整描述失败: {e}")
+            logger.error(f"提取完整描述失败: {e}", exc_info=True)
             return None, None
         finally:
             # 确保模态框被关闭
             if modal_opened:
+                logger.debug("关闭描述模态框")
                 self._close_modal()
 
     def extract_property_description(self) -> tuple[str | None, str | None]:
@@ -814,31 +1159,52 @@ class DetailPageParser:
             (title, description) 元组
         """
         try:
+            logger.debug("开始提取Property description")
             # 使用 find_elements 检查元素是否存在
             widgets = self.browser.find_elements(By.CSS_SELECTOR, '[da-id="description-widget"]')
             if not widgets:
                 logger.debug("未找到 description-widget 元素")
                 return None, None
             widget = widgets[0]
+            logger.debug("找到 description-widget，开始提取基本描述")
 
             title, description = self._extract_basic_description(widget)
+            logger.debug(
+                f"基本描述提取完成 - title: {title[:50] if title else None}, description长度: {len(description) if description else 0}"
+            )
 
-            if self._click_modal_button(
-                '[da-id="description-widget-show-more-lnk"]', "div.description-modal-body"
-            ):
-                modal_title, modal_description = self._extract_full_description_from_modal()
-                if modal_title:
-                    title = modal_title
-                if modal_description:
-                    description = modal_description
+            # 检查是否存在 See more 按钮
+            see_more_buttons = self.browser.find_elements(
+                By.CSS_SELECTOR, '[da-id="description-widget-show-more-lnk"]'
+            )
+            if see_more_buttons:
+                logger.debug("找到 See more 按钮，尝试点击获取完整描述")
+                if self._click_modal_button(
+                    '[da-id="description-widget-show-more-lnk"]', "div.description-modal-body"
+                ):
+                    logger.debug("成功打开描述模态框，提取完整描述")
+                    modal_title, modal_description = self._extract_full_description_from_modal()
+                    if modal_title:
+                        title = modal_title
+                        logger.debug(f"使用模态框标题: {title[:50]}")
+                    if modal_description:
+                        description = modal_description
+                        logger.debug(f"使用模态框描述，长度: {len(description)}")
+                else:
+                    logger.debug("点击 See more 按钮失败，使用基本描述")
+            else:
+                logger.debug("未找到 See more 按钮，使用基本描述（可能描述已完整显示）")
 
+            logger.info(
+                f"Property description提取完成 - title: {title[:50] if title else None}, description长度: {len(description) if description else 0}"
+            )
             return title, description
 
         except Exception as e:
-            logger.error(f"提取描述失败: {e}")
+            logger.error(f"提取描述失败: {e}", exc_info=True)
             return None, None
 
-    def extract_amenities(self) -> list[str]:
+    def extract_amenities(self) -> list[str]:  # noqa: C901
         """
         提取Amenities列表
 
@@ -847,8 +1213,12 @@ class DetailPageParser:
         """
         amenities: list[str] = []
         try:
-            # 使用 find_elements 检查元素是否存在
-            widgets = self.browser.find_elements(By.CSS_SELECTOR, '[da-id="property-amenities"]')
+            # 使用 driver.find_elements 检查元素是否存在
+            if not self.browser.driver:
+                return amenities
+            widgets = self.browser.driver.find_elements(
+                By.CSS_SELECTOR, '[da-id="property-amenities"]'
+            )
             if not widgets:
                 logger.debug("未找到 property-amenities 元素")
                 return amenities
@@ -869,24 +1239,34 @@ class DetailPageParser:
                 see_all_btns = widget.find_elements(
                     By.CSS_SELECTOR, '[da-id="amenities-see-all-btn"]'
                 )
-                if see_all_btns and self._click_modal_button(
-                    '[da-id="amenities-see-all-btn"]', '[da-id="facilities-amenities-modal-data"]'
-                ):
-                    modal_opened = True
-                    modal_body = self.browser.find_element(
-                        By.CSS_SELECTOR, '[da-id="facilities-amenities-modal-data"]'
-                    )
-                    modal_items = modal_body.find_elements(
-                        By.CSS_SELECTOR, "p.amenities-facilties-modal-body-value"
-                    )
+                if see_all_btns:
+                    logger.debug("找到 amenities See all 按钮，尝试点击获取完整列表")
+                    if self._click_modal_button(
+                        '[da-id="amenities-see-all-btn"]',
+                        '[da-id="facilities-amenities-modal-data"]',
+                    ):
+                        modal_opened = True
+                        modal_body = self.browser.find_element(
+                            By.CSS_SELECTOR, '[da-id="facilities-amenities-modal-data"]'
+                        )
+                        modal_items = modal_body.find_elements(
+                            By.CSS_SELECTOR, "p.amenities-facilties-modal-body-value"
+                        )
 
-                    amenities = []
-                    for item in modal_items:
-                        amenities.append(item.text.strip())
+                        amenities = []
+                        for item in modal_items:
+                            amenities.append(item.text.strip())
+                        logger.debug(f"从模态框提取到 {len(amenities)} 个amenities")
+                    else:
+                        logger.debug("点击 amenities See all 按钮失败，使用已提取的可见列表")
+                else:
+                    logger.debug(
+                        "未找到 amenities See all 按钮，使用已提取的可见列表（可能已完整显示）"
+                    )
 
             except Exception as e:
-                logger.debug(f"点击 amenities See all 按钮失败: {e}")
-                pass  # 如果没有"See all"按钮，使用已提取的
+                logger.debug(f"提取amenities模态框数据失败: {e}")
+                pass  # 如果出错，使用已提取的
             finally:
                 # 确保模态框被关闭
                 if modal_opened:
@@ -929,24 +1309,34 @@ class DetailPageParser:
                 see_all_btns = widget.find_elements(
                     By.CSS_SELECTOR, '[da-id="facilities-see-all-btn"]'
                 )
-                if see_all_btns and self._click_modal_button(
-                    '[da-id="facilities-see-all-btn"]', '[da-id="facilities-amenities-modal-data"]'
-                ):
-                    modal_opened = True
-                    modal_body = self.browser.find_element(
-                        By.CSS_SELECTOR, '[da-id="facilities-amenities-modal-data"]'
-                    )
-                    modal_items = modal_body.find_elements(
-                        By.CSS_SELECTOR, "p.amenities-facilties-modal-body-value"
-                    )
+                if see_all_btns:
+                    logger.debug("找到 facilities See all 按钮，尝试点击获取完整列表")
+                    if self._click_modal_button(
+                        '[da-id="facilities-see-all-btn"]',
+                        '[da-id="facilities-amenities-modal-data"]',
+                    ):
+                        modal_opened = True
+                        modal_body = self.browser.find_element(
+                            By.CSS_SELECTOR, '[da-id="facilities-amenities-modal-data"]'
+                        )
+                        modal_items = modal_body.find_elements(
+                            By.CSS_SELECTOR, "p.amenities-facilties-modal-body-value"
+                        )
 
-                    facilities = []
-                    for item in modal_items:
-                        facilities.append(item.text.strip())
+                        facilities = []
+                        for item in modal_items:
+                            facilities.append(item.text.strip())
+                        logger.debug(f"从模态框提取到 {len(facilities)} 个facilities")
+                    else:
+                        logger.debug("点击 facilities See all 按钮失败，使用已提取的可见列表")
+                else:
+                    logger.debug(
+                        "未找到 facilities See all 按钮，使用已提取的可见列表（可能已完整显示）"
+                    )
 
             except Exception as e:
-                logger.debug(f"点击 facilities See all 按钮失败: {e}")
-                pass  # 如果没有"See all"按钮，使用已提取的
+                logger.debug(f"提取facilities模态框数据失败: {e}")
+                pass  # 如果出错，使用已提取的
             finally:
                 # 确保模态框被关闭
                 if modal_opened:
@@ -957,211 +1347,6 @@ class DetailPageParser:
         except Exception as e:
             logger.error(f"提取Facilities失败: {e}")
             return facilities
-
-    def _extract_decimal_from_text(self, text: str) -> Decimal | None:
-        """从文本中提取小数"""
-        try:
-            match = re.search(r"[\d,]+\.?\d*", text.replace(",", ""))
-            if match:
-                return Decimal(match.group())
-        except Exception:
-            pass
-        return None
-
-    def _extract_monthly_payment(self, section, mortgage: MortgageInfo):
-        """提取每月还款额"""
-        try:
-            monthly_elem = section.find_element(
-                By.CSS_SELECTOR, '[da-id="mortgage-calculator-monthly-breakdown-value"]'
-            )
-            monthly_text = monthly_elem.text.strip()
-            value = self._extract_decimal_from_text(monthly_text)
-            if value:
-                mortgage.monthly_repayment = value
-        except Exception:
-            pass
-
-    def _extract_principal_and_interest(self, section, mortgage: MortgageInfo):
-        """提取本金和利息"""
-        try:
-            principal_elem = section.find_element(
-                By.CSS_SELECTOR, '[da-id="mortgage-calculator-monthly-pricipal-text"]'
-            )
-            principal_text = principal_elem.text.strip()
-            value = self._extract_decimal_from_text(principal_text)
-            if value:
-                mortgage.principal = value
-
-            interest_elem = section.find_element(
-                By.CSS_SELECTOR, '[da-id="mortgage-calculator-monthly-interest-text"]'
-            )
-            interest_text = interest_elem.text.strip()
-            value = self._extract_decimal_from_text(interest_text)
-            if value:
-                mortgage.interest = value
-        except Exception:
-            pass
-
-    def _extract_downpayment(self, section, mortgage: MortgageInfo):
-        """提取首付款"""
-        try:
-            downpayment_elem = section.find_element(
-                By.CSS_SELECTOR, '[da-id="mortgage-calculator-upfront-downpayment-value"]'
-            )
-            downpayment_text = downpayment_elem.text.strip()
-            value = self._extract_decimal_from_text(downpayment_text)
-            if value:
-                mortgage.downpayment = value
-        except Exception:
-            pass
-
-    def _extract_form_fields(self, section, mortgage: MortgageInfo):
-        """从表单中提取字段"""
-        try:
-            price_input = section.find_element(
-                By.CSS_SELECTOR, '[da-id="mortgage-calculator-property-price-input"]'
-            )
-            price_value = price_input.get_attribute("value")
-            if price_value:
-                mortgage.property_price = Decimal(price_value.replace(",", ""))
-
-            loan_input = section.find_element(
-                By.CSS_SELECTOR, '[da-id="mortgage-calculator-loan-amount-input"]'
-            )
-            loan_value = loan_input.get_attribute("value")
-            if loan_value:
-                mortgage.loan_amount = Decimal(loan_value.replace(",", ""))
-
-            rate_input = section.find_element(
-                By.CSS_SELECTOR, '[da-id="mortgage-calculator-interest-rate-input"]'
-            )
-            rate_value = rate_input.get_attribute("value")
-            if rate_value:
-                mortgage.interest_rate = Decimal(rate_value)
-
-            tenure_input = section.find_element(
-                By.CSS_SELECTOR, '[da-id="mortgage-calculator-loan-tenure-input"]'
-            )
-            tenure_value = tenure_input.get_attribute("value")
-            if tenure_value:
-                mortgage.loan_tenure_years = int(tenure_value)
-
-            if mortgage.property_price and mortgage.loan_amount:
-                mortgage.loan_to_value_percent = (
-                    mortgage.loan_amount / mortgage.property_price * 100
-                )
-        except Exception:
-            pass
-
-    def extract_affordability(self) -> MortgageInfo | None:
-        """
-        提取Affordability信息
-
-        Returns:
-            MortgageInfo对象
-        """
-        try:
-            listing_id = self._extract_listing_id_from_url()
-            if not listing_id:
-                return None
-
-            mortgage = MortgageInfo(listing_id=listing_id)
-
-            section = self.browser.find_element(
-                By.CSS_SELECTOR, '[da-id="mortgage-calculator-section"]'
-            )
-            if not section:
-                return None
-
-            self._extract_monthly_payment(section, mortgage)
-            self._extract_principal_and_interest(section, mortgage)
-            self._extract_downpayment(section, mortgage)
-            self._extract_form_fields(section, mortgage)
-
-            return mortgage
-
-        except Exception as e:
-            logger.error(f"提取Affordability失败: {e}")
-            return None
-
-    def _extract_faq_answer(self, item) -> str | None:
-        """提取FAQ答案"""
-        try:
-            answer_elem = item.find_element(By.CSS_SELECTOR, '[da-id="faq-widget-answer-item"]')
-            answer_text: str = answer_elem.text.strip()
-            return answer_text
-        except Exception:
-            return self._extract_faq_answer_by_clicking(item)
-
-    def _extract_faq_answer_by_clicking(self, item) -> str | None:
-        """通过点击按钮提取FAQ答案"""
-        try:
-            button = item.find_element(By.CSS_SELECTOR, "button.accordion-button")
-            if "collapsed" in button.get_attribute("class"):
-                button.click()
-                self.wait.until(
-                    EC.presence_of_element_located(
-                        (By.CSS_SELECTOR, '[da-id="faq-widget-answer-item"]')
-                    )
-                )
-                answer_elem = item.find_element(By.CSS_SELECTOR, '[da-id="faq-widget-answer-item"]')
-                answer_text: str = answer_elem.text.strip()
-                return answer_text
-        except Exception:
-            pass
-        return None
-
-    def _parse_faq_item(self, item, listing_id: int, idx: int) -> FAQ | None:
-        """解析单个FAQ项"""
-        try:
-            question_elem = item.find_element(
-                By.CSS_SELECTOR, '[da-id="faq-widget-questions-item"] .faq__item__question-text'
-            )
-            question = question_elem.text.strip()
-
-            if not question:
-                return None
-
-            answer = self._extract_faq_answer(item)
-
-            return FAQ(
-                listing_id=listing_id,
-                question=question,
-                answer=answer,
-                position=idx,
-            )
-        except Exception as e:
-            logger.debug(f"解析FAQ项失败: {e}")
-            return None
-
-    def extract_faqs(self) -> list[FAQ]:
-        """
-        提取FAQs
-
-        Returns:
-            FAQ对象列表
-        """
-        faqs: list[FAQ] = []
-        try:
-            faq_root = self.browser.find_element(By.CSS_SELECTOR, '[da-id="faq-widget"]')
-            if not faq_root:
-                return faqs
-
-            listing_id = self._extract_listing_id_from_url()
-            if not listing_id:
-                return faqs
-
-            faq_items = faq_root.find_elements(By.CSS_SELECTOR, ".faq__item")
-            for idx, item in enumerate(faq_items):
-                faq = self._parse_faq_item(item, listing_id, idx)
-                if faq:
-                    faqs.append(faq)
-
-            return faqs
-
-        except Exception as e:
-            logger.error(f"提取FAQs失败: {e}")
-            return faqs
 
     def _scroll_to_button_center(self, button) -> None:
         """滚动到按钮位置，使其居中显示"""
@@ -1403,7 +1588,8 @@ class DetailPageParser:
             # 图片包含元素，可以直接传递
             media_urls.extend(self._extract_images())
             # 视频和平面图不包含元素
-            media_urls.extend(self._extract_videos())
+            # 注意：现在不提取视频，只处理图片
+            # media_urls.extend(self._extract_videos())
             media_urls.extend(self._extract_floor_plans())
 
             if not media_urls:
@@ -1425,11 +1611,26 @@ class DetailPageParser:
         """
         try:
             current_url = self.browser.driver.current_url
-            # URL格式可能是: https://www.propertyguru.com.sg/property-for-sale/.../listing_id
-            # 或者包含listing_id参数
-            match = re.search(r"/(\d+)(?:/|$|\?)", current_url)
+            logger.debug(f"当前URL: {current_url}")
+            # URL格式可能是: https://www.propertyguru.com.sg/listing/for-sale-xxx-500000208
+            # 提取URL末尾的数字作为listing_id
+            # 尝试匹配 URL 末尾的数字（可能是路径的最后一部分）
+            match = re.search(r"-(\d+)(?:/|$|\?)", current_url)
             if match:
-                return int(match.group(1))
+                listing_id = int(match.group(1))
+                logger.debug(f"从URL提取到listing_id: {listing_id}")
+                return listing_id
+
+            # 如果上面没匹配到，尝试匹配URL中任何位置的数字段（优先匹配较长的数字）
+            matches = re.findall(r"/(\d+)(?:/|$|\?)", current_url)
+            if matches:
+                # 选择最长的数字（通常是listing_id）
+                listing_id = max(int(m) for m in matches if len(m) >= 6)
+                logger.debug(f"从URL提取到listing_id（备选方案）: {listing_id}")
+                return listing_id
+
+            logger.warning(f"无法从URL提取listing_id: {current_url}")
             return None
-        except Exception:
+        except Exception as e:
+            logger.error(f"提取listing_id失败: {e}", exc_info=True)
             return None

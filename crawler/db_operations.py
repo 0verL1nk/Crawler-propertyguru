@@ -8,22 +8,19 @@ from __future__ import annotations
 from collections import deque
 from typing import TYPE_CHECKING
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.dialects.mysql import insert
 
 from utils.logger import get_logger
 
 from .database import DatabaseManager, MySQLManager
 from .orm_models import (
-    FAQORM,
-    AmenityORM,
     ListingInfoORM,
     MediaItemORM,
-    MortgageInfoORM,
 )
 
 if TYPE_CHECKING:
-    from .models import FAQ, Amenity, ListingInfo, MediaItem, MortgageInfo, PropertyDetails
+    from .models import ListingInfo, MediaItem, PropertyDetails
 
 logger = get_logger("DBOperations")
 
@@ -44,9 +41,6 @@ class DBOperations:
         # 数据缓冲队列（用于批量插入）
         self.listing_buffer: deque = deque(maxlen=100)
         self.media_buffer: deque = deque(maxlen=100)
-        self.faq_buffer: deque = deque(maxlen=100)
-        self.mortgage_buffer: deque = deque(maxlen=100)
-        self.amenities_buffer: deque = deque(maxlen=100)
 
         # 检查是否是MySQL
         if not isinstance(self.db, MySQLManager):
@@ -148,6 +142,14 @@ class DBOperations:
         """
         try:
             assert isinstance(self.db, MySQLManager)
+            logger.debug(
+                f"开始保存PropertyDetails - listing_id: {details.listing_id}, "
+                f"property_details: {bool(details.property_details)}, "
+                f"description: {bool(details.description)}, "
+                f"description_title: {bool(details.description_title)}, "
+                f"amenities: {bool(details.amenities)}, "
+                f"facilities: {bool(details.facilities)}"
+            )
             with self.db.get_session() as session:
                 stmt = select(ListingInfoORM).where(ListingInfoORM.listing_id == details.listing_id)
                 listing = session.scalar(stmt)
@@ -157,144 +159,23 @@ class DBOperations:
                     )
                     listing.description = details.description
                     listing.description_title = details.description_title
+                    listing.amenities = details.amenities if details.amenities else None
+                    listing.facilities = details.facilities if details.facilities else None
                     # commit 由上下文管理器自动处理
-                    logger.debug(f"更新房源详细信息: {details.listing_id}")
+                    logger.info(
+                        f"更新房源详细信息成功: {details.listing_id}, "
+                        f"property_details字段数: {len(details.property_details) if details.property_details else 0}, "
+                        f"description: {len(details.description) if details.description else 0} chars, "
+                        f"amenities: {len(details.amenities) if details.amenities else 0} 项, "
+                        f"facilities: {len(details.facilities) if details.facilities else 0} 项"
+                    )
                     return True
                 else:
-                    logger.warning(f"房源不存在: {details.listing_id}")
+                    logger.warning(f"房源不存在，无法保存PropertyDetails: {details.listing_id}")
                     return False
 
         except Exception as e:
-            logger.error(f"保存房产详细信息失败: {e}")
-            return False
-
-    def save_mortgage_info(self, mortgage: MortgageInfo, flush: bool = False) -> bool:
-        """
-        保存房贷信息
-
-        Args:
-            mortgage: MortgageInfo对象
-            flush: 是否立即刷新缓冲区
-
-        Returns:
-            是否成功
-        """
-        try:
-            if not flush:
-                self.mortgage_buffer.append(mortgage)
-                if (
-                    self.mortgage_buffer.maxlen is not None
-                    and len(self.mortgage_buffer) >= self.mortgage_buffer.maxlen
-                ):
-                    return self._flush_mortgage_buffer()
-                return True
-
-            return self._flush_mortgage_buffer([mortgage])
-
-        except Exception as e:
-            logger.error(f"保存房贷信息失败: {e}")
-            return False
-
-    def _flush_mortgage_buffer(self, mortgages: list[MortgageInfo] | None = None) -> bool:
-        """刷新房贷信息缓冲区"""
-        if mortgages is None:
-            if not self.mortgage_buffer:
-                return True
-            mortgages = list(self.mortgage_buffer)
-            self.mortgage_buffer.clear()
-
-        if not mortgages:
-            return True
-
-        try:
-            assert isinstance(self.db, MySQLManager)
-            with self.db.get_session() as session:
-                # 准备数据
-                data_list = [mortgage.to_dict() for mortgage in mortgages]
-
-                # 使用 MySQL 的 INSERT ... ON DUPLICATE KEY UPDATE
-                stmt = insert(MortgageInfoORM).values(data_list)
-                stmt = stmt.on_duplicate_key_update(
-                    monthly_repayment=stmt.inserted.monthly_repayment,
-                    principal=stmt.inserted.principal,
-                    interest=stmt.inserted.interest,
-                    downpayment=stmt.inserted.downpayment,
-                    loan_amount=stmt.inserted.loan_amount,
-                    loan_to_value_percent=stmt.inserted.loan_to_value_percent,
-                    property_price=stmt.inserted.property_price,
-                    interest_rate=stmt.inserted.interest_rate,
-                    loan_tenure_years=stmt.inserted.loan_tenure_years,
-                    data_extracted_at=stmt.inserted.data_extracted_at,
-                )
-                session.execute(stmt)
-                # commit 由上下文管理器自动处理
-
-            logger.info(f"批量保存 {len(mortgages)} 条房贷信息")
-            return True
-
-        except Exception as e:
-            logger.error(f"批量保存房贷信息失败: {e}")
-            return False
-
-    def save_faqs(self, faqs: list[FAQ], flush: bool = False) -> bool:
-        """
-        保存FAQs
-
-        Args:
-            faqs: FAQ对象列表
-            flush: 是否立即刷新缓冲区
-
-        Returns:
-            是否成功
-        """
-        try:
-            if not flush:
-                self.faq_buffer.extend(faqs)
-                if (
-                    self.faq_buffer.maxlen is not None
-                    and len(self.faq_buffer) >= self.faq_buffer.maxlen
-                ):
-                    return self._flush_faq_buffer()
-                return True
-
-            return self._flush_faq_buffer(faqs)
-
-        except Exception as e:
-            logger.error(f"保存FAQs失败: {e}")
-            return False
-
-    def _flush_faq_buffer(self, faqs: list[FAQ] | None = None) -> bool:
-        """刷新FAQ缓冲区"""
-        if faqs is None:
-            if not self.faq_buffer:
-                return True
-            faqs = list(self.faq_buffer)
-            self.faq_buffer.clear()
-
-        if not faqs:
-            return True
-
-        try:
-            assert isinstance(self.db, MySQLManager)
-            with self.db.get_session() as session:
-                # 准备数据
-                data_list = [faq.to_dict() for faq in faqs]
-
-                # 使用 MySQL 的 INSERT ... ON DUPLICATE KEY UPDATE
-                # 注意：需要根据 listing_id + question 来判断唯一性
-                stmt = insert(FAQORM).values(data_list)
-                stmt = stmt.on_duplicate_key_update(
-                    answer=stmt.inserted.answer,
-                    updated_at=stmt.inserted.updated_at,
-                )
-                session.execute(stmt)
-                # commit 由上下文管理器自动处理
-
-            logger.info(f"批量保存 {len(faqs)} 条FAQ")
-            return True
-
-        except Exception as e:
-            logger.error(f"批量保存FAQ失败: {e}")
+            logger.error(f"保存房产详细信息失败: {e}", exc_info=True)
             return False
 
     def save_media(self, media_items: list[MediaItem], flush: bool = False) -> bool:
@@ -325,7 +206,11 @@ class DBOperations:
             return False
 
     def _flush_media_buffer(self, media_items: list[MediaItem] | None = None) -> bool:
-        """刷新媒体缓冲区"""
+        """
+        刷新媒体缓冲区
+
+        注意：为避免auto_increment跳变，先查询已存在的记录，只插入不存在的记录
+        """
         if media_items is None:
             if not self.media_buffer:
                 return True
@@ -338,95 +223,90 @@ class DBOperations:
         try:
             assert isinstance(self.db, MySQLManager)
             with self.db.get_session() as session:
-                # 准备数据
                 data_list = [media.to_dict() for media in media_items]
-
-                # 使用 MySQL 的 INSERT ... ON DUPLICATE KEY UPDATE
-                stmt = insert(MediaItemORM).values(data_list)
-                stmt = stmt.on_duplicate_key_update(
-                    media_url=stmt.inserted.media_url,
-                    s3_key=stmt.inserted.s3_key,
-                    original_url=stmt.inserted.original_url,
-                    watermark_removed=stmt.inserted.watermark_removed,
-                    position=stmt.inserted.position,
+                to_insert, to_update = self._separate_media_items(session, data_list)
+                self._insert_new_media(session, to_insert)
+                self._update_existing_media(session, to_update)
+                logger.info(
+                    f"批量保存媒体记录完成 - 新增: {len(to_insert)}, 更新: {len(to_update)}"
                 )
-                session.execute(stmt)
-                # commit 由上下文管理器自动处理
-
-            logger.info(f"批量保存 {len(media_items)} 条媒体记录")
             return True
 
         except Exception as e:
-            logger.error(f"批量保存媒体记录失败: {e}")
+            logger.error(f"批量保存媒体记录失败: {e}", exc_info=True)
             return False
 
-    def save_amenities(self, amenities: list[Amenity], flush: bool = False) -> bool:
-        """
-        保存Amenities和Facilities
+    def _separate_media_items(
+        self, session, data_list: list[dict]
+    ) -> tuple[list[dict], list[dict]]:
+        """分离需要插入和更新的媒体记录"""
+        if not data_list:
+            return [], []
 
-        Args:
-            amenities: Amenity对象列表
-            flush: 是否立即刷新缓冲区
-
-        Returns:
-            是否成功
-        """
-        try:
-            if not flush:
-                self.amenities_buffer.extend(amenities)
-                if (
-                    self.amenities_buffer.maxlen is not None
-                    and len(self.amenities_buffer) >= self.amenities_buffer.maxlen
-                ):
-                    return self._flush_amenities_buffer()
-                return True
-
-            return self._flush_amenities_buffer(amenities)
-
-        except Exception as e:
-            logger.error(f"保存Amenities失败: {e}")
-            return False
-
-    def _flush_amenities_buffer(self, amenities: list[Amenity] | None = None) -> bool:
-        """刷新Amenities缓冲区"""
-        if amenities is None:
-            if not self.amenities_buffer:
-                return True
-            amenities = list(self.amenities_buffer)
-            self.amenities_buffer.clear()
-
-        if not amenities:
-            return True
-
-        try:
-            assert isinstance(self.db, MySQLManager)
-            with self.db.get_session() as session:
-                # 准备数据
-                data_list = [amenity.to_dict() for amenity in amenities]
-
-                # 使用 MySQL 的 INSERT ... ON DUPLICATE KEY UPDATE
-                # 注意：表中有 UNIQUE KEY uk_listing_amenity (listing_id, amenity_type, name)
-                stmt = insert(AmenityORM).values(data_list)
-                stmt = stmt.on_duplicate_key_update(
-                    listing_id=stmt.inserted.listing_id,
+        # 先去重：对于相同的 (listing_id, original_url) 组合，只保留第一个
+        seen_keys: set[tuple[int, str]] = set()
+        unique_data_list = []
+        for item in data_list:
+            key = (item["listing_id"], item["original_url"])
+            if key not in seen_keys:
+                seen_keys.add(key)
+                unique_data_list.append(item)
+            else:
+                logger.debug(
+                    f"跳过重复的媒体URL: listing_id={item['listing_id']}, url={item['original_url']}"
                 )
-                session.execute(stmt)
-                # commit 由上下文管理器自动处理
 
-            logger.info(f"批量保存 {len(amenities)} 条Amenities")
-            return True
+        listing_ids = list({item["listing_id"] for item in unique_data_list})
+        original_urls = [item["original_url"] for item in unique_data_list]
 
-        except Exception as e:
-            logger.error(f"批量保存Amenities失败: {e}")
-            return False
+        existing_records = session.execute(
+            select(MediaItemORM.listing_id, MediaItemORM.original_url).where(
+                MediaItemORM.listing_id.in_(listing_ids),
+                MediaItemORM.original_url.in_(original_urls),
+            )
+        ).all()
+
+        existing_set = {(r.listing_id, r.original_url) for r in existing_records}
+        to_insert = []
+        to_update = []
+
+        for item in unique_data_list:
+            key = (item["listing_id"], item["original_url"])
+            if key in existing_set:
+                to_update.append(item)
+            else:
+                to_insert.append(item)
+
+        return to_insert, to_update
+
+    def _insert_new_media(self, session, to_insert: list[dict]):
+        """插入新媒体记录"""
+        if to_insert:
+            stmt = insert(MediaItemORM).values(to_insert)
+            session.execute(stmt)
+            logger.debug(f"插入 {len(to_insert)} 条新媒体记录")
+
+    def _update_existing_media(self, session, to_update: list[dict]):
+        """更新已存在的媒体记录"""
+        if to_update:
+            for item in to_update:
+                existing_record = session.scalar(
+                    select(MediaItemORM).where(
+                        MediaItemORM.listing_id == item["listing_id"],
+                        MediaItemORM.original_url == item["original_url"],
+                    )
+                )
+                if existing_record:
+                    existing_record.media_url = item.get("media_url")
+                    existing_record.s3_key = item.get("s3_key")
+                    existing_record.watermark_removed = item.get("watermark_removed", False)
+                    existing_record.position = item.get("position")
+            logger.debug(f"更新 {len(to_update)} 条已存在的媒体记录")
 
     def flush_all(self):
         """刷新所有缓冲区"""
         self._flush_listing_buffer()
-        self._flush_mortgage_buffer()
-        self._flush_faq_buffer()
         self._flush_media_buffer()
-        self._flush_amenities_buffer()
         logger.info("所有缓冲区已刷新")
 
     def mark_listing_completed(self, listing_id: int) -> bool:
@@ -442,6 +322,8 @@ class DBOperations:
         try:
             # 类型断言：已在 __init__ 中检查只支持 MySQL
             assert isinstance(self.db, MySQLManager)
+
+            # 第一次尝试：查询并标记
             with self.db.get_session() as session:
                 stmt = select(ListingInfoORM).where(ListingInfoORM.listing_id == listing_id)
                 listing = session.scalar(stmt)
@@ -450,8 +332,24 @@ class DBOperations:
                     # get_session 上下文管理器会自动 commit
                     logger.debug(f"标记房源为已完成: {listing_id}")
                     return True
+
+            # 如果房源不存在，可能是缓冲区还没刷新，尝试刷新后再查询
+            # 这种情况不应该报warning，因为可能是正常的时序问题
+            logger.debug(f"房源不存在，可能是缓冲区未刷新: {listing_id}，将尝试刷新缓冲区")
+            # 刷新listing缓冲区（这会创建新的session）
+            self._flush_listing_buffer()
+
+            # 第二次尝试：刷新缓冲区后重新查询
+            with self.db.get_session() as session:
+                stmt = select(ListingInfoORM).where(ListingInfoORM.listing_id == listing_id)
+                listing = session.scalar(stmt)
+                if listing:
+                    listing.is_completed = True
+                    logger.debug(f"刷新缓冲区后成功标记房源为已完成: {listing_id}")
+                    return True
                 else:
-                    logger.warning(f"房源不存在: {listing_id}")
+                    # 如果刷新后还是不存在，说明确实有问题
+                    logger.warning(f"房源不存在（刷新缓冲区后仍不存在）: {listing_id}")
                     return False
         except Exception as e:
             logger.error(f"标记房源完成状态失败: {e}")
@@ -500,3 +398,22 @@ class DBOperations:
         except Exception as e:
             logger.error(f"检查房源完成状态失败: {e}")
             return False
+
+    def count_completed_listings(self) -> int:
+        """
+        统计数据库中已完成房源的数量
+
+        Returns:
+            已完成房源数量
+        """
+        try:
+            assert isinstance(self.db, MySQLManager)
+            with self.db.get_session() as session:
+                stmt = select(func.count(ListingInfoORM.listing_id)).where(
+                    ListingInfoORM.is_completed == True  # noqa: E712
+                )
+                count = session.scalar(stmt)
+                return int(count) if count is not None else 0
+        except Exception as e:
+            logger.error(f"统计已完成房源数量失败: {e}")
+            return 0

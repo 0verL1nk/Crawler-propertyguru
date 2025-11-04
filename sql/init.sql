@@ -45,11 +45,13 @@ CREATE TABLE IF NOT EXISTS listing_info (
     property_details JSON DEFAULT NULL COMMENT '房产详细信息（JSON格式，包含所有动态字段）',
     description TEXT DEFAULT NULL COMMENT '房产描述（About this property）',
     description_title VARCHAR(255) DEFAULT NULL COMMENT '房产描述标题',
+    amenities JSON DEFAULT NULL COMMENT '便利设施列表（Amenities）',
+    facilities JSON DEFAULT NULL COMMENT '公共设施列表（Common facilities）',
     is_completed BOOLEAN DEFAULT FALSE COMMENT '是否完成（整个流程成功后才为true）',
 
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '记录创建时间',
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '最后更新时间'
-) ENGINE=InnoDB COMMENT='房源基本信息表（含绿色节能评分）';
+) ENGINE=InnoDB COMMENT='房源基本信息表';
 
 -- =========================================================
 -- 3️⃣ 房源多媒体表（图片/视频）
@@ -68,38 +70,7 @@ CREATE TABLE IF NOT EXISTS listing_media (
     UNIQUE KEY uk_listing_media_url (listing_id, original_url) COMMENT '同一房源同一原始URL只能有一条记录，防止重复存储'
 ) ENGINE=InnoDB COMMENT='房源多媒体资源表（图片和视频）';
 
--- =========================================================
--- 4️⃣ 房贷计算信息表
--- =========================================================
-CREATE TABLE IF NOT EXISTS mortgage_calculator (
-    id BIGINT AUTO_INCREMENT PRIMARY KEY COMMENT '自增主键ID',
-    listing_id BIGINT NOT NULL COMMENT '对应 listing_info 的 listing_id',
-    monthly_repayment DECIMAL(15,2) DEFAULT NULL COMMENT '每月预计还款额 (S$)',
-    principal DECIMAL(15,2) DEFAULT NULL COMMENT '本金部分 (S$)',
-    interest DECIMAL(15,2) DEFAULT NULL COMMENT '利息部分 (S$)',
-    downpayment DECIMAL(15,2) DEFAULT NULL COMMENT '首付款 (S$)',
-    loan_amount DECIMAL(15,2) DEFAULT NULL COMMENT '贷款金额 (S$)',
-    loan_to_value_percent DECIMAL(5,2) DEFAULT NULL COMMENT '贷款成数 (如75%)',
-    property_price DECIMAL(15,2) DEFAULT NULL COMMENT '房产价格 (S$)',
-    interest_rate DECIMAL(5,2) DEFAULT NULL COMMENT '贷款利率 (%)',
-    loan_tenure_years INT DEFAULT NULL COMMENT '贷款年限 (年)',
-    data_extracted_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '数据采集时间',
-    FOREIGN KEY (listing_id) REFERENCES listing_info(listing_id) ON DELETE CASCADE
-) ENGINE=InnoDB COMMENT='房贷计算信息表';
 
--- =========================================================
--- 5️⃣ 房源 FAQ 表
--- =========================================================
-CREATE TABLE IF NOT EXISTS listing_faqs (
-    id BIGINT AUTO_INCREMENT PRIMARY KEY COMMENT '自增主键ID',
-    listing_id BIGINT NOT NULL COMMENT '对应 listing_info 的 listing_id',
-    question TEXT NOT NULL COMMENT 'FAQ 问题',
-    answer TEXT DEFAULT NULL COMMENT 'FAQ 答案',
-    position INT DEFAULT NULL COMMENT '在页面中顺序',
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '记录创建时间',
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '最后更新时间',
-    FOREIGN KEY (listing_id) REFERENCES listing_info(listing_id) ON DELETE CASCADE
-) ENGINE=InnoDB COMMENT='房源常见问题（FAQ）表';
 
 -- =========================================================
 -- 6️⃣ 房源设施表（Amenities和Facilities）
@@ -120,6 +91,3 @@ CREATE TABLE IF NOT EXISTS listing_amenities (
 CREATE INDEX idx_listing_id ON listing_info (listing_id);
 CREATE INDEX idx_listing_completed ON listing_info (is_completed);
 CREATE INDEX idx_media_listing ON listing_media (listing_id);
-CREATE INDEX idx_mortgage_listing ON mortgage_calculator (listing_id);
-CREATE INDEX idx_faq_listing ON listing_faqs (listing_id);
-CREATE INDEX idx_amenities_listing ON listing_amenities (listing_id);

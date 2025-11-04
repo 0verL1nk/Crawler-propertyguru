@@ -5,8 +5,8 @@ SQLAlchemy ORM 模型定义
 
 from __future__ import annotations
 
+from datetime import date  # noqa: TC003
 from decimal import Decimal
-from typing import TYPE_CHECKING
 
 from sqlalchemy import (
     DECIMAL,
@@ -22,9 +22,6 @@ from sqlalchemy import (
     func,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
-
-if TYPE_CHECKING:
-    from datetime import date
 
 
 class Base(DeclarativeBase):
@@ -80,6 +77,12 @@ class ListingInfoORM(Base):
     description_title: Mapped[str | None] = mapped_column(
         String(255), nullable=True, comment="房产描述标题"
     )
+    amenities: Mapped[list[str] | None] = mapped_column(
+        JSON, nullable=True, comment="便利设施列表（Amenities）"
+    )
+    facilities: Mapped[list[str] | None] = mapped_column(
+        JSON, nullable=True, comment="公共设施列表（Common facilities）"
+    )
     is_completed: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, comment="是否完成"
     )
@@ -114,85 +117,4 @@ class MediaItemORM(Base):
     position: Mapped[int | None] = mapped_column(Integer, nullable=True, comment="媒体展示顺序")
     uploaded_at: Mapped[DateTime] = mapped_column(
         DateTime, server_default=func.now(), comment="上传S3时间"
-    )
-
-
-class MortgageInfoORM(Base):
-    """房贷计算信息表 ORM 模型"""
-
-    __tablename__ = "mortgage_calculator"
-
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
-    listing_id: Mapped[int] = mapped_column(
-        BigInteger, nullable=False, comment="对应 listing_info 的 listing_id"
-    )
-    monthly_repayment: Mapped[Decimal | None] = mapped_column(
-        DECIMAL(15, 2), nullable=True, comment="每月预计还款额 (S$)"
-    )
-    principal: Mapped[Decimal | None] = mapped_column(
-        DECIMAL(15, 2), nullable=True, comment="本金部分 (S$)"
-    )
-    interest: Mapped[Decimal | None] = mapped_column(
-        DECIMAL(15, 2), nullable=True, comment="利息部分 (S$)"
-    )
-    downpayment: Mapped[Decimal | None] = mapped_column(
-        DECIMAL(15, 2), nullable=True, comment="首付款 (S$)"
-    )
-    loan_amount: Mapped[Decimal | None] = mapped_column(
-        DECIMAL(15, 2), nullable=True, comment="贷款金额 (S$)"
-    )
-    loan_to_value_percent: Mapped[Decimal | None] = mapped_column(
-        DECIMAL(5, 2), nullable=True, comment="贷款成数 (如75%)"
-    )
-    property_price: Mapped[Decimal | None] = mapped_column(
-        DECIMAL(15, 2), nullable=True, comment="房产价格 (S$)"
-    )
-    interest_rate: Mapped[Decimal | None] = mapped_column(
-        DECIMAL(5, 2), nullable=True, comment="贷款利率 (%)"
-    )
-    loan_tenure_years: Mapped[int | None] = mapped_column(
-        Integer, nullable=True, comment="贷款年限 (年)"
-    )
-    data_extracted_at: Mapped[DateTime] = mapped_column(
-        DateTime, server_default=func.now(), comment="数据采集时间"
-    )
-
-
-class FAQORM(Base):
-    """房源 FAQ 表 ORM 模型"""
-
-    __tablename__ = "listing_faqs"
-
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
-    listing_id: Mapped[int] = mapped_column(
-        BigInteger, nullable=False, comment="对应 listing_info 的 listing_id"
-    )
-    question: Mapped[str] = mapped_column(Text, nullable=False, comment="FAQ 问题")
-    answer: Mapped[str | None] = mapped_column(Text, nullable=True, comment="FAQ 答案")
-    position: Mapped[int | None] = mapped_column(Integer, nullable=True, comment="在页面中顺序")
-    created_at: Mapped[DateTime] = mapped_column(
-        DateTime, server_default=func.now(), comment="记录创建时间"
-    )
-    updated_at: Mapped[DateTime] = mapped_column(
-        DateTime, server_default=func.now(), onupdate=func.now(), comment="最后更新时间"
-    )
-
-
-class AmenityORM(Base):
-    """房源设施表 ORM 模型"""
-
-    __tablename__ = "listing_amenities"
-
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
-    listing_id: Mapped[int] = mapped_column(
-        BigInteger, nullable=False, comment="对应 listing_info 的 listing_id"
-    )
-    amenity_type: Mapped[str] = mapped_column(
-        Enum("amenity", "facility", name="amenity_type_enum"),
-        nullable=False,
-        comment="类型: amenity(便利设施) / facility(公共设施)",
-    )
-    name: Mapped[str] = mapped_column(String(255), nullable=False, comment="设施名称")
-    created_at: Mapped[DateTime] = mapped_column(
-        DateTime, server_default=func.now(), comment="记录创建时间"
     )

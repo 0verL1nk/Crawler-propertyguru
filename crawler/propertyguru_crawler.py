@@ -23,8 +23,8 @@ from .db_operations import DBOperations
 
 if TYPE_CHECKING:
     from .config import Config
+    from .models import ListingInfo, MediaItem
 from .media_processor import MediaProcessor
-from .models import Amenity, ListingInfo, MediaItem
 from .parsers import DetailPageParser, ListingPageParser
 from .progress_manager import CrawlProgress
 from .storage import StorageManagerProtocol, create_storage_manager
@@ -88,9 +88,16 @@ class PropertyGuruCrawler:
 
         # 进度管理器
         progress_file = os.getenv("CRAWL_PROGRESS_FILE", "crawl_progress.json")
+        # 暂时不传入db_ops，因为在_init_components中db_ops还未初始化
+        # 会在_init_components后设置
         self.progress = CrawlProgress(progress_file=progress_file)
 
         self._init_components()
+
+        # 初始化完成后，设置db_ops到progress
+        # 注意：如果配置了数据库，_init_database会设置db_ops
+        if self.db_ops is not None:
+            self.progress.db_ops = self.db_ops  # type: ignore[unreachable]
 
     def _init_browser(self):
         """初始化浏览器"""
@@ -170,11 +177,18 @@ class PropertyGuruCrawler:
     def _init_media_processor(self, proxy_manager: Any | None, direct_proxy_url: str | None):
         """初始化媒体处理器"""
         if self.storage_manager:
+            # 读取去水印配置，决定是否立即处理
+            watermark_config = self.config.get_section("watermark_remover")
+            process_immediately = True
+            if watermark_config:
+                process_immediately = watermark_config.get("process_immediately", True)
+
             self.media_processor = MediaProcessor(
                 storage_manager=self.storage_manager,
                 watermark_remover=self.watermark_remover,
                 proxy_url=direct_proxy_url,
                 proxy_manager=proxy_manager,
+                process_immediately=process_immediately,
             )
 
     def _init_components(self):
@@ -246,18 +260,18 @@ class PropertyGuruCrawler:
             wait = WebDriverWait(self.browser.driver, timeout=30)
             wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "div.search-result-root")))
 
-            # 解析页面
+            # 解析页面（优化：先缓存所有卡片HTML，再批量解析）
             parser = ListingPageParser(self.browser)
-            cards = parser.extract_listing_cards()
+            cards_html = parser.extract_listing_cards_html()
 
             listings = []
-            total_cards = len(cards)
-            logger.info(f"开始解析 {total_cards} 个房产卡片...")
+            total_cards = len(cards_html)
+            logger.info(f"开始解析 {total_cards} 个房产卡片（使用HTML缓存优化）...")
 
-            for idx, card in enumerate(cards, 1):
+            for idx, card_html in enumerate(cards_html, 1):
                 logger.info(f"解析第 {idx}/{total_cards} 个卡片...")
                 try:
-                    listing = parser.parse_listing_card(card)
+                    listing = parser.parse_listing_card_html(card_html)
                     if listing:
                         listings.append(listing)
                         logger.info(f"✓ 成功解析: {listing.listing_id} - {listing.title}")
@@ -274,7 +288,7 @@ class PropertyGuruCrawler:
             logger.error(f"爬取列表页失败: {e}")
             return []
 
-    def crawl_detail_page(self, detail_url: str) -> dict | None:
+    def crawl_detail_page(self, detail_url: str) -> dict | None:  # noqa: C901
         """
         爬取详情页
 
@@ -317,25 +331,56 @@ class PropertyGuruCrawler:
             parser = DetailPageParser(self.browser)
 
             # 提取所有信息
+            logger.info("开始提取详情页数据")
             property_details = parser.extract_property_details()
+            logger.info(f"Property details提取结果: {property_details is not None}")
+
             description_title, description = parser.extract_property_description()
+            logger.info(
+                f"Description提取结果 - title: {description_title is not None}, description: {description is not None}"
+            )
+
             amenities = parser.extract_amenities()
             facilities = parser.extract_facilities()
-            mortgage_info = parser.extract_affordability()
-            faqs = parser.extract_faqs()
             media_urls = parser.extract_media_urls()
 
-            # 更新PropertyDetails的description字段
+            # 如果property_details提取失败，尝试从URL提取listing_id并创建PropertyDetails对象
+            if not property_details:
+                # 尝试从URL提取listing_id
+                listing_id = parser._extract_listing_id_from_url()
+
+                if listing_id:
+                    logger.info(
+                        f"property_details提取失败，但找到listing_id: {listing_id}，创建空的PropertyDetails对象"
+                    )
+                    from .models import PropertyDetails
+
+                    property_details = PropertyDetails(listing_id=listing_id)
+                    property_details.property_details = {}
+                else:
+                    logger.warning(
+                        "无法获取listing_id，无法创建PropertyDetails对象，description和description_title将无法保存"
+                    )
+
+            # 更新PropertyDetails的description、amenities和facilities字段
             if property_details:
                 property_details.description = description
                 property_details.description_title = description_title
+                property_details.amenities = amenities  # 直接保存amenities列表
+                property_details.facilities = facilities  # 直接保存facilities列表
+                logger.debug(
+                    f"PropertyDetails更新 - listing_id: {property_details.listing_id}, "
+                    f"property_details字段数: {len(property_details.property_details) if property_details.property_details else 0}, "
+                    f"description: {len(description) if description else 0} chars, "
+                    f"description_title: {len(description_title) if description_title else 0} chars, "
+                    f"amenities: {len(amenities) if amenities else 0} 项, "
+                    f"facilities: {len(facilities) if facilities else 0} 项"
+                )
 
             result = {
                 "property_details": property_details,
                 "amenities": amenities,
                 "facilities": facilities,
-                "mortgage_info": mortgage_info,
-                "faqs": faqs,
                 "media_urls": media_urls,
             }
 
@@ -380,44 +425,22 @@ class PropertyGuruCrawler:
         if not self.db_ops:
             raise RuntimeError("数据库操作未初始化")
         if detail_data.get("property_details"):
-            self.db_ops.save_property_details(detail_data["property_details"])
-
-        if detail_data.get("mortgage_info"):
-            self.db_ops.save_mortgage_info(detail_data["mortgage_info"], flush=False)
-
-        if detail_data.get("faqs"):
-            self.db_ops.save_faqs(detail_data["faqs"], flush=False)
-
-    def _build_amenities_list(self, listing_id: int, detail_data: dict) -> list[Amenity]:
-        """构建设施列表"""
-        amenities_list = []
-        if detail_data.get("amenities"):
-            for amenity_name in detail_data["amenities"]:
-                amenities_list.append(
-                    Amenity(
-                        listing_id=listing_id,
-                        amenity_type="amenity",
-                        name=amenity_name,
-                    )
-                )
-        if detail_data.get("facilities"):
-            for facility_name in detail_data["facilities"]:
-                amenities_list.append(
-                    Amenity(
-                        listing_id=listing_id,
-                        amenity_type="facility",
-                        name=facility_name,
-                    )
-                )
-        return amenities_list
-
-    def _save_amenities_data(self, listing_id: int, detail_data: dict):
-        """保存设施数据"""
-        if not self.db_ops:
-            raise RuntimeError("数据库操作未初始化")
-        amenities_list = self._build_amenities_list(listing_id, detail_data)
-        if amenities_list:
-            self.db_ops.save_amenities(amenities_list, flush=False)
+            details = detail_data["property_details"]
+            logger.info(
+                f"准备保存PropertyDetails - listing_id: {details.listing_id}, "
+                f"property_details字段数: {len(details.property_details) if details.property_details else 0}, "
+                f"description: {len(details.description) if details.description else 0} chars, "
+                f"description_title: {len(details.description_title) if details.description_title else 0} chars, "
+                f"amenities: {len(details.amenities) if details.amenities else 0} 项, "
+                f"facilities: {len(details.facilities) if details.facilities else 0} 项"
+            )
+            success = self.db_ops.save_property_details(details)
+            if success:
+                logger.info(f"PropertyDetails保存成功: {details.listing_id}")
+            else:
+                logger.warning(f"PropertyDetails保存失败: {details.listing_id}")
+        else:
+            logger.warning("detail_data中没有property_details，跳过保存")
 
     def _save_media_data(self, detail_data: dict):
         """保存媒体数据"""
@@ -439,9 +462,13 @@ class PropertyGuruCrawler:
             return
 
         try:
-            self._save_basic_info(listing)
+            # 先保存基本信息并刷新缓冲区，确保房源已存在
+            # 使用 flush=True 确保立即写入数据库
+            self.db_ops.save_listing_info(listing, flush=True)
+
+            # 然后保存详细信息（property_details, description, amenities, facilities等）
+            # amenities和facilities现在直接通过PropertyDetails保存到info表
             self._save_property_details_data(detail_data)
-            self._save_amenities_data(listing.listing_id, detail_data)
             self._save_media_data(detail_data)
 
             # 所有数据保存成功后，标记为已完成
@@ -573,17 +600,16 @@ class PropertyGuruCrawler:
             wait = WebDriverWait(self.browser.driver, timeout=30)
             wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "div.search-result-root")))
 
-            # 解析页面，只提取第一个卡片
+            # 解析页面，只提取第一个卡片（使用HTML缓存优化）
             parser = ListingPageParser(self.browser)
-            cards = parser.extract_listing_cards()
+            cards_html = parser.extract_listing_cards_html()
 
-            if not cards:
+            if not cards_html:
                 logger.error("第一页没有找到房源卡片")
                 return
 
-            logger.info(f"找到 {len(cards)} 个房产卡片，只解析第一个...")
-            first_card = cards[0]
-            first_listing = parser.parse_listing_card(first_card)
+            logger.info(f"找到 {len(cards_html)} 个房产卡片，只解析第一个...")
+            first_listing = parser.parse_listing_card_html(cards_html[0])
 
             if not first_listing:
                 logger.error("解析第一个卡片失败")

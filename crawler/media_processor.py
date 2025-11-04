@@ -36,6 +36,7 @@ class MediaProcessor:
         watermark_remover: WatermarkRemover | None = None,
         proxy_url: str | None = None,
         proxy_manager: Any | None = None,
+        process_immediately: bool = True,
     ):
         """
         初始化媒体处理器
@@ -45,11 +46,15 @@ class MediaProcessor:
             watermark_remover: 去水印工具实例（可选）
             proxy_url: 代理URL（用于下载图片，静态代理）
             proxy_manager: 代理管理器实例（用于动态获取直连IP代理）
+            process_immediately: 是否立即进行去水印处理
+                True: 立即进行去水印并上传S3
+                False: 只保存原始URL到数据库，后续再批量处理去水印
         """
         self.storage_manager = storage_manager
         self.watermark_remover = watermark_remover
         self.proxy_url = proxy_url
         self.proxy_manager = proxy_manager
+        self.process_immediately = process_immediately
         self.temp_dir = Path(tempfile.gettempdir()) / "propertyguru_media"
         self.temp_dir.mkdir(parents=True, exist_ok=True)
 
@@ -58,6 +63,9 @@ class MediaProcessor:
 
         # 下载并发控制：限制同时下载的图片数量（避免过多并发导致卡住）
         self.download_semaphore = asyncio.Semaphore(5)  # 最多同时下载5张图片
+
+        if not process_immediately:
+            logger.info("已配置为跳过去水印处理，只保存原始URL到数据库")
 
     def _generate_temp_filename(
         self, url: str, listing_id: int | None = None, position: int | None = None
@@ -519,7 +527,7 @@ class MediaProcessor:
     ) -> MediaItem | None:
         """
         处理单张图片（下载、去水印、上传S3）
-        只有去水印成功才上传S3，失败时也保存记录（包含原始URL）以便后续补偿
+        根据process_immediately配置决定是否立即进行去水印处理
 
         Args:
             image_url: 图片URL
@@ -532,6 +540,19 @@ class MediaProcessor:
             MediaItem对象，失败返回None
         """
         try:
+            # 如果配置为不立即处理，只保存原始URL
+            if not self.process_immediately:
+                logger.debug(f"跳过去水印处理，只保存原始URL: {image_url}")
+                return MediaItem(
+                    listing_id=listing_id,
+                    media_type="image",
+                    original_url=image_url,
+                    media_url=None,
+                    s3_key=None,
+                    watermark_removed=False,
+                    position=position,
+                )
+
             # 1. 获取图片
             temp_path = await self._get_image_from_browser_or_download(
                 image_url, listing_id, position, img_element, browser_driver
@@ -633,11 +654,11 @@ class MediaProcessor:
         注意：现在不处理视频，只处理图片
 
         Args:
-            media_urls: [(media_type, url), ...] 列表
+            media_urls: [(media_type, url), ...] 列表，视频会被自动跳过
             listing_id: 房源ID
 
         Returns:
-            MediaItem对象列表
+            MediaItem对象列表（只包含图片）
         """
         tasks = []
 
@@ -658,8 +679,8 @@ class MediaProcessor:
                     browser_driver=browser_driver,
                 )
             elif media_type == "video":
-                # 跳过视频处理
-                logger.info(f"跳过视频处理: {url}")
+                # 跳过视频处理（现在不保存视频）
+                logger.debug(f"跳过视频处理: {url}")
                 continue
             else:
                 logger.warning(f"未知的媒体类型: {media_type}")

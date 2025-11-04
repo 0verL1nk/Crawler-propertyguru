@@ -54,6 +54,8 @@ class PropertyDetails:
     property_details: dict = field(default_factory=dict)  # 存储所有Property details字段（字典格式）
     description: str | None = None  # About this property的描述
     description_title: str | None = None  # About this property的标题
+    amenities: list[str] | None = None  # Amenities列表
+    facilities: list[str] | None = None  # Common facilities列表
 
     def to_dict(self) -> dict[str, Any]:
         """转换为字典"""
@@ -64,52 +66,10 @@ class PropertyDetails:
             result["description"] = self.description
         if self.description_title is not None:
             result["description_title"] = self.description_title
-        return result
-
-
-@dataclass
-class MortgageInfo:
-    """房贷计算信息"""
-
-    listing_id: int
-    monthly_repayment: Decimal | None = None
-    principal: Decimal | None = None
-    interest: Decimal | None = None
-    downpayment: Decimal | None = None
-    loan_amount: Decimal | None = None
-    loan_to_value_percent: Decimal | None = None
-    property_price: Decimal | None = None
-    interest_rate: Decimal | None = None
-    loan_tenure_years: int | None = None
-
-    def to_dict(self) -> dict:
-        """转换为字典"""
-        result = {"listing_id": self.listing_id}
-        for key, value in self.__dict__.items():
-            if key != "listing_id" and value is not None:
-                result[key] = value
-        return result
-
-
-@dataclass
-class FAQ:
-    """FAQ数据"""
-
-    listing_id: int
-    question: str
-    answer: str | None = None
-    position: int | None = None
-
-    def to_dict(self) -> dict:
-        """转换为字典"""
-        result = {
-            "listing_id": self.listing_id,
-            "question": self.question,
-        }
-        if self.answer is not None:
-            result["answer"] = self.answer
-        if self.position is not None:
-            result["position"] = self.position
+        if self.amenities is not None:
+            result["amenities"] = self.amenities
+        if self.facilities is not None:
+            result["facilities"] = self.facilities
         return result
 
 
@@ -140,20 +100,3 @@ class MediaItem:
         if self.position is not None:
             result["position"] = self.position
         return result
-
-
-@dataclass
-class Amenity:
-    """设施/便利设施"""
-
-    listing_id: int
-    amenity_type: str  # 'amenity' or 'facility'
-    name: str
-
-    def to_dict(self) -> dict:
-        """转换为字典"""
-        return {
-            "listing_id": self.listing_id,
-            "amenity_type": self.amenity_type,
-            "name": self.name,
-        }
