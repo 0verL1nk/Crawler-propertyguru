@@ -26,6 +26,7 @@ except ImportError:
     REDIS_AVAILABLE = False
 
 from utils.logger import get_logger
+from utils.retry import retry_on_error
 
 logger = get_logger("DatabaseManager")
 
@@ -289,37 +290,34 @@ class MySQLManager:
         logger.info("MySQL SSL 连接已启用（使用默认 SSL，不验证证书）")
         return {"ssl": {"check_hostname": False}}
 
+    @retry_on_error(max_retries=3, retry_delay=5, logger_instance=logger)
     def _connect(self):
         """建立连接"""
-        try:
-            uri = self._build_connection_uri()
-            connect_args = self._build_ssl_config()
+        uri = self._build_connection_uri()
+        connect_args = self._build_ssl_config()
 
-            if not uri:
-                raise ValueError("数据库URI不能为空")
+        if not uri:
+            raise ValueError("数据库URI不能为空")
 
-            self.engine = create_engine(
-                uri,
-                poolclass=QueuePool,
-                pool_size=10,
-                max_overflow=20,
-                pool_recycle=3600,
-                echo=False,
-                connect_args=connect_args,
-            )
+        self.engine = create_engine(
+            uri,
+            poolclass=QueuePool,
+            pool_size=10,
+            max_overflow=20,
+            pool_recycle=3600,
+            echo=False,
+            connect_args=connect_args,
+        )
 
-            # 创建Session工厂
-            self.Session = sessionmaker(bind=self.engine)
+        # 创建Session工厂
+        self.Session = sessionmaker(bind=self.engine)
 
-            # 测试连接
-            with self.engine.connect() as conn:
-                conn.execute(text("SELECT 1"))
+        # 测试连接
+        with self.engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
 
-            database_name = self.config.get("database", "crawler_db")
-            logger.info(f"MySQL连接成功: {database_name}")
-        except Exception as e:
-            logger.error(f"MySQL连接失败: {e}")
-            raise
+        database_name = self.config.get("database", "crawler_db")
+        logger.info(f"MySQL连接成功: {database_name}")
 
     @contextmanager
     def get_session(self) -> Generator[Session, None, None]:

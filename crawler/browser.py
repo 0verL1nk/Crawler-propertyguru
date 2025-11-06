@@ -30,8 +30,72 @@ except ImportError:
     uc = None
 
 from utils.logger import get_logger
+from utils.retry import retry_on_error
 
 logger = get_logger("BrowserManager")
+
+
+# JavaScript 脚本常量 - 用于禁用媒体功能
+DISABLE_MEDIA_JS = """
+// 禁用媒体设备 API
+Object.defineProperty(navigator, 'mediaDevices', {
+    get: () => undefined
+});
+Object.defineProperty(navigator, 'getUserMedia', {
+    get: () => undefined
+});
+Object.defineProperty(navigator, 'webkitGetUserMedia', {
+    get: () => undefined
+});
+Object.defineProperty(navigator, 'mozGetUserMedia', {
+    get: () => undefined
+});
+Object.defineProperty(navigator, 'msGetUserMedia', {
+    get: () => undefined
+});
+
+// 阻止 video 和 audio 元素加载
+(function() {
+    const originalCreateElement = document.createElement;
+    document.createElement = function(tagName) {
+        const element = originalCreateElement.call(document, tagName);
+        if (tagName.toLowerCase() === 'video' || tagName.toLowerCase() === 'audio') {
+            element.remove();
+            return originalCreateElement.call(document, 'div');
+        }
+        return element;
+    };
+
+    // 阻止现有视频/音频元素加载
+    const observer = new MutationObserver(function(mutations) {
+        mutations.forEach(function(mutation) {
+            mutation.addedNodes.forEach(function(node) {
+                if (node.nodeName === 'VIDEO' || node.nodeName === 'AUDIO') {
+                    node.remove();
+                }
+            });
+        });
+    });
+    observer.observe(document.body || document.documentElement, {
+        childList: true,
+        subtree: true
+    });
+})();
+"""
+
+# 需要阻止的媒体文件扩展名
+BLOCKED_MEDIA_URLS = [
+    "*.mp4",
+    "*.webm",
+    "*.ogg",
+    "*.avi",
+    "*.mov",
+    "*.wmv",
+    "*.flv",
+    "*.mkv",
+    "*.m4v",
+    "*.3gp",
+]
 
 
 class RemoteBrowser:
@@ -720,6 +784,7 @@ class UndetectedBrowser:
         version_main: int | None = None,
         use_subprocess: bool = True,
         disable_images: bool = False,
+        use_virtual_display: bool = False,
         **kwargs,
     ):
         """
@@ -730,6 +795,7 @@ class UndetectedBrowser:
             version_main: Chrome主版本号（可选，自动检测）
             use_subprocess: 是否使用子进程模式
             disable_images: 是否禁用图片加载（提升速度）
+            use_virtual_display: 是否使用虚拟显示（有头模式但不显示窗口，需要安装xvfb）
             **kwargs: 传递给undetected_chromedriver的其他参数
 
         Examples:
@@ -738,6 +804,9 @@ class UndetectedBrowser:
             >>>
             >>> # 无头模式
             >>> browser = UndetectedBrowser(headless=True)
+            >>>
+            >>> # 有头模式但不显示窗口（推荐）
+            >>> browser = UndetectedBrowser(use_virtual_display=True)
             >>>
             >>> # 指定Chrome版本
             >>> browser = UndetectedBrowser(version_main=120)
@@ -754,16 +823,102 @@ class UndetectedBrowser:
         self.version_main = version_main
         self.use_subprocess = use_subprocess
         self.disable_images = disable_images
+        self.use_virtual_display = use_virtual_display
         self.kwargs = kwargs
 
-        # 浏览器驱动
+        # 浏览器驱动和虚拟显示
         self.driver: uc.Chrome | None = None
         self.connection = None  # 本地浏览器没有连接对象
+        self.display: Any = None  # 虚拟显示（pyvirtualdisplay.Display）
 
         logger.info(
-            f"Undetected浏览器已初始化（headless={headless}, disable_images={disable_images}）"
+            f"Undetected浏览器已初始化（headless={headless}, "
+            f"virtual_display={use_virtual_display}, disable_images={disable_images}）"
         )
 
+    def _configure_performance_options(self, options: Options) -> None:
+        """配置性能优化选项（禁用图片、CSS、字体等）"""
+        logger.info("已启用资源优化：禁用图片、CSS、字体、视频加载")
+
+        # Chrome preferences 配置
+        prefs = {
+            "profile.managed_default_content_settings.images": 2,
+            "profile.managed_default_content_settings.stylesheets": 2,
+            "profile.managed_default_content_settings.fonts": 2,
+            "profile.managed_default_content_settings.media_stream": 2,
+            "profile.managed_default_content_settings.media_stream_mic": 2,
+            "profile.managed_default_content_settings.media_stream_camera": 2,
+            "profile.default_content_setting_values.media_stream_mic": 2,
+            "profile.default_content_setting_values.media_stream_camera": 2,
+            "profile.default_content_setting_values.autoplay": 2,
+            "profile.default_content_setting_values.notifications": 2,
+        }
+        options.add_experimental_option("prefs", prefs)
+
+        # Chrome 命令行参数
+        performance_args = [
+            "--blink-settings=imagesEnabled=false",
+            "--disable-extensions",
+            "--disable-plugins",
+            "--mute-audio",
+            "--disable-background-networking",
+            "--disable-background-timer-throttling",
+            "--disable-renderer-backgrounding",
+            "--disable-backgrounding-occluded-windows",
+            "--disable-component-update",
+            "--disable-default-apps",
+            "--disable-sync",
+            "--disable-translate",
+            "--hide-scrollbars",
+            "--metrics-recording-only",
+            "--no-first-run",
+            "--safebrowsing-disable-auto-update",
+            "--disable-ipc-flooding-protection",
+        ]
+        for arg in performance_args:
+            options.add_argument(arg)
+
+    def _setup_media_blocking_cdp(self) -> None:
+        """通过 CDP 设置媒体阻止功能"""
+        if not self.driver:
+            return
+
+        try:
+            # 注入 JavaScript 禁用媒体 API
+            self.driver.execute_cdp_cmd(
+                "Page.addScriptToEvaluateOnNewDocument",
+                {"source": DISABLE_MEDIA_JS},
+            )
+
+            # 启用 Network 域并阻止媒体资源
+            try:
+                self.driver.execute_cdp_cmd("Network.enable", {})
+                self.driver.execute_cdp_cmd(
+                    "Network.setBlockedURLs",
+                    {"urls": BLOCKED_MEDIA_URLS},
+                )
+            except Exception as e:
+                logger.debug(f"Network 域设置失败（不影响使用）: {e}")
+
+            # 禁用媒体权限
+            try:
+                for permission_name in ["camera", "microphone"]:
+                    self.driver.execute_cdp_cmd(
+                        "Browser.setPermission",
+                        {
+                            "origin": "https://*",
+                            "permission": {"name": permission_name},
+                            "setting": "denied",
+                        },
+                    )
+            except Exception as e:
+                logger.debug(f"权限设置失败（不影响使用）: {e}")
+
+            logger.debug("已通过 CDP 禁用媒体访问和资源加载")
+        except Exception as e:
+            logger.warning(f"通过 CDP 禁用媒体失败（不影响使用）: {e}")
+
+    @retry_on_error(max_retries=3, retry_delay=5, logger_instance=logger)
     def connect(self, options: Options | None = None):
         """
         连接到本地浏览器
@@ -771,194 +926,83 @@ class UndetectedBrowser:
         Args:
             options: Chrome选项（可选）
         """
-        try:
-            logger.info("正在启动Undetected浏览器...")
+        logger.info("正在启动Undetected浏览器...")
 
-            # 创建或使用提供的选项
-            if options is None:
-                options = Options()
+        # 启动虚拟显示（如果启用）
+        if self.use_virtual_display and not self.headless:
+            try:
+                from pathlib import Path
 
-            # 禁用图片和其他资源加载（提升性能）
-            if self.disable_images:
-                logger.info("已启用资源优化：禁用图片、CSS、字体、视频加载")
-                prefs = {
-                    "profile.managed_default_content_settings.images": 2,  # 禁用图片
-                    "profile.managed_default_content_settings.stylesheets": 2,  # 禁用CSS
-                    "profile.managed_default_content_settings.fonts": 2,  # 禁用字体
-                    "profile.managed_default_content_settings.media_stream": 2,  # 禁用媒体流
-                    "profile.managed_default_content_settings.media_stream_mic": 2,  # 禁用麦克风
-                    "profile.managed_default_content_settings.media_stream_camera": 2,  # 禁用摄像头
-                    "profile.default_content_setting_values.media_stream_mic": 2,
-                    "profile.default_content_setting_values.media_stream_camera": 2,
-                    "profile.default_content_setting_values.autoplay": 2,  # 禁用自动播放
-                    "profile.default_content_setting_values.notifications": 2,  # 禁用通知
-                }
-                options.add_experimental_option("prefs", prefs)
+                from pyvirtualdisplay import Display
 
-                # 额外的性能优化
-                options.add_argument("--blink-settings=imagesEnabled=false")
-                options.add_argument("--disable-extensions")
-                options.add_argument("--disable-plugins")
-                options.add_argument("--mute-audio")  # 静音
-                options.add_argument("--disable-background-networking")
-                options.add_argument("--disable-background-timer-throttling")
-                options.add_argument("--disable-renderer-backgrounding")
-                options.add_argument("--disable-backgrounding-occluded-windows")
-                options.add_argument("--disable-component-update")
-                options.add_argument("--disable-default-apps")
-                options.add_argument("--disable-sync")
-                options.add_argument("--disable-translate")
-                options.add_argument("--hide-scrollbars")
-                options.add_argument("--metrics-recording-only")
-                options.add_argument("--no-first-run")
-                options.add_argument("--safebrowsing-disable-auto-update")
-                options.add_argument("--disable-ipc-flooding-protection")
+                # 检测是否在 WSL2 环境
+                proc_version = Path("/proc/version")
+                is_wsl2 = proc_version.exists() and "microsoft" in proc_version.read_text().lower()
 
-            # 准备参数
-            uc_options: dict[str, Any] = {}
-            if self.headless:
-                uc_options["headless"] = True
-            if self.version_main:
-                uc_options["version_main"] = self.version_main
-            if self.use_subprocess:
-                uc_options["use_subprocess"] = self.use_subprocess
-
-            # 设置选项
-            uc_options["options"] = options
-
-            # 合并其他kwargs
-            uc_options.update(self.kwargs)
-
-            # 创建undetected Chrome驱动
-            self.driver = uc.Chrome(**uc_options)
-
-            # 如果禁用了图片，通过 CDP 进一步禁用媒体
-            if self.disable_images:
-                try:
-                    # 禁用媒体自动播放和阻止视频/音频元素
-                    self.driver.execute_cdp_cmd(
-                        "Page.addScriptToEvaluateOnNewDocument",
-                        {
-                            "source": """
-                                // 禁用媒体设备 API
-                                Object.defineProperty(navigator, 'mediaDevices', {
-                                    get: () => undefined
-                                });
-                                Object.defineProperty(navigator, 'getUserMedia', {
-                                    get: () => undefined
-                                });
-                                Object.defineProperty(navigator, 'webkitGetUserMedia', {
-                                    get: () => undefined
-                                });
-                                Object.defineProperty(navigator, 'mozGetUserMedia', {
-                                    get: () => undefined
-                                });
-                                Object.defineProperty(navigator, 'msGetUserMedia', {
-                                    get: () => undefined
-                                });
-
-                                // 阻止 video 和 audio 元素加载
-                                (function() {
-                                    const originalCreateElement = document.createElement;
-                                    document.createElement = function(tagName) {
-                                        const element = originalCreateElement.call(document, tagName);
-                                        if (tagName.toLowerCase() === 'video' || tagName.toLowerCase() === 'audio') {
-                                            element.remove();
-                                            return originalCreateElement.call(document, 'div');
-                                        }
-                                        return element;
-                                    };
-
-                                    // 阻止现有视频/音频元素加载
-                                    const observer = new MutationObserver(function(mutations) {
-                                        mutations.forEach(function(mutation) {
-                                            mutation.addedNodes.forEach(function(node) {
-                                                if (node.nodeName === 'VIDEO' || node.nodeName === 'AUDIO') {
-                                                    node.remove();
-                                                }
-                                            });
-                                        });
-                                    });
-                                    observer.observe(document.body || document.documentElement, {
-                                        childList: true,
-                                        subtree: true
-                                    });
-                                })();
-                            """
-                        },
+                if is_wsl2:
+                    logger.warning(
+                        "检测到 WSL2 环境，虚拟显示可能不稳定。"
+                        "建议：1) 使用无头模式 BROWSER_HEADLESS=true；"
+                        "2) 或关闭虚拟显示 BROWSER_USE_VIRTUAL_DISPLAY=false"
                     )
-                    # 启用 Network 域并阻止媒体资源
-                    try:
-                        self.driver.execute_cdp_cmd("Network.enable", {})
-                        # 阻止视频和音频资源加载
-                        self.driver.execute_cdp_cmd(
-                            "Network.setBlockedURLs",
-                            {
-                                "urls": [
-                                    "*.mp4",
-                                    "*.webm",
-                                    "*.ogg",
-                                    "*.avi",
-                                    "*.mov",
-                                    "*.wmv",
-                                    "*.flv",
-                                    "*.mkv",
-                                    "*.m4v",
-                                    "*.3gp",
-                                ]
-                            },
-                        )
-                    except Exception as network_error:
-                        logger.debug(f"Network 域设置失败（不影响使用）: {network_error}")
 
-                    # 设置内容设置，禁用媒体权限
-                    try:
-                        self.driver.execute_cdp_cmd(
-                            "Browser.setPermission",
-                            {
-                                "origin": "https://*",
-                                "permission": {"name": "camera"},
-                                "setting": "denied",
-                            },
-                        )
-                        self.driver.execute_cdp_cmd(
-                            "Browser.setPermission",
-                            {
-                                "origin": "https://*",
-                                "permission": {"name": "microphone"},
-                                "setting": "denied",
-                            },
-                        )
-                    except Exception as perm_error:
-                        logger.debug(f"权限设置失败（不影响使用）: {perm_error}")
-
-                    logger.debug("已通过 CDP 禁用媒体访问和资源加载")
-                except Exception as e:
-                    logger.warning(f"通过 CDP 禁用媒体失败（不影响使用）: {e}")
-
-            logger.info("Undetected浏览器启动成功")
-
-        except Exception as e:
-            error_msg = str(e)
-            logger.error(f"启动Undetected浏览器失败: {error_msg}")
-
-            if "chrome" in error_msg.lower() or "driver" in error_msg.lower():
-                logger.error("=" * 60)
-                logger.error("❌ Undetected Chrome驱动启动失败")
-                logger.error("=" * 60)
-                logger.error("可能的原因：")
-                logger.error("  1. Chrome浏览器未安装")
-                logger.error("  2. Chrome版本与驱动不匹配")
-                logger.error("  3. 缺少必要的系统依赖")
-                logger.error("")
-                logger.error("解决方案：")
-                logger.error("  - 确保已安装Chrome浏览器")
-                logger.error(
-                    "  - 更新undetected-chromedriver: pip install -U undetected-chromedriver"
+                self.display = Display(visible=False, size=(1920, 1080))
+                self.display.start()
+                logger.info("虚拟显示已启动（有头模式但不显示窗口）")
+            except ImportError:
+                logger.warning(
+                    "pyvirtualdisplay 未安装，将使用普通模式。"
+                    "安装方法：pip install pyvirtualdisplay 和 sudo apt-get install xvfb"
                 )
-                logger.error("=" * 60)
+            except Exception as e:
+                error_msg = str(e)
+                if "Read-only file system" in error_msg or "/tmp/.X11-unix" in error_msg:
+                    logger.warning(
+                        f"WSL2 环境限制：无法启动虚拟显示 - {e}\n"
+                        "解决方案：\n"
+                        "  1. 使用无头模式：BROWSER_HEADLESS=true\n"
+                        "  2. 使用普通有头模式：BROWSER_USE_VIRTUAL_DISPLAY=false\n"
+                        "  3. 在 Windows 上使用 VcXsrv：https://sourceforge.net/projects/vcxsrv/\n"
+                        "当前将继续使用普通模式..."
+                    )
+                else:
+                    logger.warning(f"启动虚拟显示失败: {e}，将使用普通模式")
 
-            raise
+        # 创建或使用提供的选项
+        if options is None:
+            options = Options()
+
+        # 无头模式下设置窗口大小
+        if self.headless:
+            options.add_argument("--window-size=1920,1080")
+            logger.debug("无头模式：设置窗口大小为 1920x1080")
+
+        # 配置性能优化（如果启用）
+        if self.disable_images:
+            self._configure_performance_options(options)
+
+        # 准备 undetected-chromedriver 参数
+        uc_options: dict[str, Any] = {
+            "options": options,
+        }
+        if self.headless:
+            uc_options["headless"] = True
+        if self.version_main:
+            uc_options["version_main"] = self.version_main
+        if self.use_subprocess:
+            uc_options["use_subprocess"] = self.use_subprocess
+
+        # 合并其他自定义参数
+        uc_options.update(self.kwargs)
+
+        # 创建 undetected Chrome 驱动
+        self.driver = uc.Chrome(**uc_options)
+
+        # 通过 CDP 进一步配置媒体阻止（如果启用）
+        if self.disable_images:
+            self._setup_media_blocking_cdp()
+
+        logger.info("Undetected浏览器启动成功")
 
     def cdp(self, cmd: str, params: dict[str, Any] | None = None) -> Any:
         """
@@ -1185,6 +1229,16 @@ class UndetectedBrowser:
                 logger.error(f"关闭浏览器失败: {e}")
             finally:
                 self.driver = None
+
+        # 停止虚拟显示（如果启动了）
+        if self.display:
+            try:
+                self.display.stop()
+                logger.debug("虚拟显示已停止")
+            except Exception as e:
+                logger.warning(f"停止虚拟显示失败: {e}")
+            finally:
+                self.display = None
 
     def __enter__(self):
         """上下文管理器入口"""

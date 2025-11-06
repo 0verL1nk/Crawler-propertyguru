@@ -50,6 +50,9 @@ dependencies = [
     # 异步支持
     "aiofiles>=23.2.0",
 
+    # 虚拟显示（用于无窗口运行有头浏览器）
+    "pyvirtualdisplay>=3.0",
+
     # 数据处理
     "pandas>=2.1.0",
     "numpy>=1.26.0",

@@ -19,27 +19,60 @@
 
 ## 📦 安装
 
-### 使用 uv (推荐)
+### 🚀 一键安装（推荐 - Linux/Ubuntu）
 
 ```bash
 # 克隆项目
 git clone <your-repo-url>
-cd crawler-framework
+cd propertyguru
+
+# 运行自动安装脚本
+./setup.sh
+```
+
+安装脚本会自动完成：
+- ✅ 安装系统依赖（Xvfb、构建工具等）
+- ✅ 安装 Google Chrome
+- ✅ 安装 uv 包管理器
+- ✅ 安装所有 Python 依赖
+- ✅ 配置虚拟显示支持
+- ✅ 创建必要的目录和配置文件
+- ✅ 测试安装是否成功
+
+### 手动安装
+
+#### 使用 uv (推荐)
+
+```bash
+# 克隆项目
+git clone <your-repo-url>
+cd propertyguru
+
+# 安装系统依赖（Ubuntu/Debian）
+sudo apt-get update
+sudo apt-get install -y xvfb x11-xkb-utils xfonts-100dpi xfonts-75dpi xfonts-scalable xfonts-cyrillic
+
+# 安装 Google Chrome
+wget https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
+sudo apt-get install -y ./google-chrome-stable_current_amd64.deb
+
+# 安装 uv
+curl -LsSf https://astral.sh/uv/install.sh | sh
 
 # 使用 uv 安装依赖
 uv sync
+uv pip install pyvirtualdisplay
 
 # 激活虚拟环境
-# Windows
-.venv\Scripts\activate
 # Linux/Mac
 source .venv/bin/activate
 ```
 
-### 使用 pip
+#### 使用 pip
 
 ```bash
 pip install -r requirements.txt
+pip install pyvirtualdisplay
 ```
 
 ## 🚀 快速开始
@@ -55,19 +88,25 @@ cp env.example .env
 编辑 `.env` 文件，配置代理和其他服务：
 
 ```bash
-# 浏览器类型配置（重要！）
-# 可选值：undetected（推荐）, remote, local
+# ===== 浏览器配置（重要！）=====
+# 浏览器类型：undetected（推荐）, remote, local
 BROWSER_TYPE=undetected
-BROWSER_HEADLESS=false
 
+# 虚拟显示模式（推荐 - 原生 Linux 服务器，WSL2 用户建议设为 false）
+BROWSER_HEADLESS=false
+BROWSER_USE_VIRTUAL_DISPLAY=false   # WSL2 环境建议设为 false
+BROWSER_DISABLE_IMAGES=true         # 禁用资源加载，大幅提升速度
+
+# ===== 代理配置 =====
 # 动态住宅代理（推荐用于批量爬取）
 PROXY_URL=http://brd-customer-xxx:password@brd.superproxy.io:33335
 
-# 图片去水印API配置（可选）
+# ===== 图片处理（可选）=====
 WATERMARK_REMOVER_PRODUCT_SERIAL=your_serial
 WATERMARK_REMOVER_PRODUCT_CODE=067003
 
-# 数据库配置（可选）
+# ===== 数据库配置 =====
+MYSQL_URI=mysql+pymysql://root:password@localhost:3306/crawler_db
 MONGODB_URI=mongodb://localhost:27017/crawler_db
 ```
 
@@ -113,17 +152,38 @@ socks5://ip3:port3
 - **适用场景**:
   - 生产环境爬取
   - 对抗反爬虫检测
-  - 绕过 Cloudflare、Imperva 等防护
+  - 绕过 Cloudflare、Imperva 等防护（5秒盾等）
   - 模拟真实用户行为
 - **特点**:
   - 基于 undetected-chromedriver
   - 自动绕过 webdriver 检测
   - 自动处理 Chrome 版本匹配
-  - 支持无头模式
+  - 支持无头模式、有头模式、虚拟显示模式
+  - 可禁用图片/资源加载，大幅提升速度
 - **配置**:
+
+**方式1: 虚拟显示模式（推荐 - 原生 Linux 服务器）**
 ```bash
 BROWSER_TYPE=undetected
-BROWSER_HEADLESS=false  # 推荐关闭无头模式以提高成功率
+BROWSER_HEADLESS=false
+BROWSER_USE_VIRTUAL_DISPLAY=true  # 有头模式但不显示窗口
+BROWSER_DISABLE_IMAGES=true       # 禁用资源加载，提升速度
+```
+⚠️ **WSL2 用户注意**：虚拟显示在 WSL2 中可能不稳定，建议使用方式2或方式3
+
+**方式2: 有头模式（本地开发）**
+```bash
+BROWSER_TYPE=undetected
+BROWSER_HEADLESS=false
+BROWSER_USE_VIRTUAL_DISPLAY=false
+BROWSER_DISABLE_IMAGES=true
+```
+
+**方式3: 无头模式（可能触发检测）**
+```bash
+BROWSER_TYPE=undetected
+BROWSER_HEADLESS=true
+BROWSER_DISABLE_IMAGES=true
 ```
 
 #### 🌐 Remote Browser（Bright Data）
@@ -149,15 +209,21 @@ BROWSER_HEADLESS=false
 
 #### 浏览器对比
 
-| 特性 | Undetected | Remote | Local |
-|-----|-----------|--------|-------|
-| 反检测能力 | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐ | ⭐⭐ |
-| 成本 | 免费 | 付费 | 免费 |
-| 配置难度 | 简单 | 中等 | 简单 |
-| 稳定性 | 高 | 高 | 中 |
-| 验证码处理 | 需手动 | 自动 | 需手动 |
+| 特性 | Undetected (虚拟显示) | Undetected (无头) | Remote | Local |
+|-----|---------------------|-----------------|--------|-------|
+| 反检测能力 | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐ | ⭐⭐⭐⭐ | ⭐⭐ |
+| 5秒盾绕过 | ✅ | ❌ | ✅ | ❌ |
+| 成本 | 免费 | 免费 | 付费 | 免费 |
+| 配置难度 | 简单 | 简单 | 中等 | 简单 |
+| 稳定性 | 高 | 中 | 高 | 中 |
+| 服务器适用 | ✅ | ✅ | ✅ | ❌ |
+| 验证码处理 | 需手动 | 需手动 | 自动 | 需手动 |
+| 资源消耗 | 中 | 低 | 低 | 中 |
 
-> 💡 **推荐**: 生产环境使用 `undetected` 模式，开发测试使用 `local` 模式
+> 💡 **推荐配置**:
+> - **服务器生产环境**: `undetected + 虚拟显示模式` - 最佳反检测效果
+> - **本地开发调试**: `undetected + 有头模式` - 可视化调试
+> - **无服务器/云函数**: `remote` - 云端托管
 
 详细使用指南: [Undetected Chrome 使用文档](docs/UNDETECTED_CHROME_USAGE.md)
 
@@ -184,11 +250,35 @@ urls = ['https://api.example.com/data']
 spider.start(urls, parse)
 ```
 
-### 4. 运行示例
+### 4. 运行爬虫
+
+#### PropertyGuru 爬虫
 
 ```bash
-# 运行基础示例
-uv run python examples/basic_example.py
+# 测试单个房源
+uv run python main.py --test-single
+
+# 测试单页爬取
+uv run python main.py --test-page 1
+
+# 更新模式（推荐 - 持续爬取最新数据）
+uv run python main.py --update-mode
+
+# 更新模式 + 自定义间隔（每10分钟一次）
+uv run python main.py --update-mode --interval 10
+
+# 更新模式 + 限制页数
+uv run python main.py --update-mode --max-pages 5
+
+# 爬取指定页数范围
+uv run python main.py --start-page 1 --end-page 10
+```
+
+#### 其他示例
+
+```bash
+# 测试 Undetected Chrome
+uv run python test_undetected.py
 
 # 运行代理示例
 uv run python examples/proxy_example.py

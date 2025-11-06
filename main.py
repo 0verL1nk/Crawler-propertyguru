@@ -1,11 +1,16 @@
 """
 PropertyGuru爬虫主入口
 支持测试模式：
-- 测试单个房源: python main.py --test-single
-- 测试第一页: python main.py --test-page
-- 测试十页: python main.py --test-pages 10
-- 爬取全部: python main.py [start_page] [end_page]
-- 重置进度: python main.py --reset-progress
+  python main.py --test-single              # 测试单个房源
+  python main.py --test-page                # 测试第一页
+  python main.py --test-pages 10            # 测试前10页
+  python main.py 1 100                      # 爬取第1-100页
+  python main.py 1                          # 从第1页开始爬取所有页
+  python main.py --reset-progress           # 重置进度
+  python main.py --update-mode              # 更新模式（每5分钟循环一次）
+  python main.py --update-mode --interval 10 # 更新模式（每10分钟循环一次）
+  python main.py --update-mode --interval 0  # 更新模式（只执行一次）
+  python main.py --update-mode --max-pages 5 # 更新模式（最多爬5页）
 
 支持断点续传：
 - 爬虫会自动保存进度到 crawl_progress.json

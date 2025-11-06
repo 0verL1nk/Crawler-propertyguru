@@ -396,6 +396,51 @@ class DBOperations:
             logger.error(f"检查房源完成状态失败: {e}")
             return False
 
+    def batch_check_listings_status(self, listing_ids: list[int]) -> dict[int, dict[str, bool]]:
+        """
+        批量检查多个房源的状态（使用 ORM）
+
+        Args:
+            listing_ids: 房源ID列表
+
+        Returns:
+            字典，key为listing_id，value为包含exists和is_completed的字典
+            例如: {123: {"exists": True, "is_completed": True}, ...}
+        """
+        try:
+            if not listing_ids:
+                return {}
+
+            # 类型断言：已在 __init__ 中检查只支持 MySQL
+            assert isinstance(self.db, MySQLManager)
+            with self.db.get_session() as session:
+                stmt = select(ListingInfoORM).where(ListingInfoORM.listing_id.in_(listing_ids))
+                results = session.scalars(stmt).all()
+
+                # 构建结果字典
+                status_dict: dict[int, dict[str, bool]] = {}
+                found_ids = set()
+                for listing in results:
+                    status_dict[listing.listing_id] = {
+                        "exists": True,
+                        "is_completed": listing.is_completed,
+                    }
+                    found_ids.add(listing.listing_id)
+
+                # 对于未找到的房源，标记为不存在
+                for listing_id in listing_ids:
+                    if listing_id not in found_ids:
+                        status_dict[listing_id] = {
+                            "exists": False,
+                            "is_completed": False,
+                        }
+
+                return status_dict
+        except Exception as e:
+            logger.error(f"批量检查房源状态失败: {e}")
+            # 返回空字典，外部可以用默认值处理
+            return {}
+
     def count_completed_listings(self) -> int:
         """
         统计数据库中已完成房源的数量

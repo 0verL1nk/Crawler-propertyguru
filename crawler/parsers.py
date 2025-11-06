@@ -79,32 +79,52 @@ class ListingPageParser:
             最大页数，如果无法获取则返回None
         """
         try:
-            # 查找分页器 ul da-id="hui-pagination"
+            # 滚动到页面底部，确保分页器加载
+            if self.browser.driver:
+                logger.debug("滚动到页面底部以加载分页器")
+                self.browser.driver.execute_script(
+                    "window.scrollTo(0, document.body.scrollHeight);"
+                )
+                # 等待分页器元素出现
+                if self.wait:
+                    from selenium.webdriver.support import expected_conditions as EC
+
+                    self.wait.until(
+                        EC.presence_of_element_located(
+                            (By.CSS_SELECTOR, 'ul[da-id="hui-pagination"]')
+                        )
+                    )
+
+            # 方法1：查找分页器并提取所有数字
             pagination = self.browser.find_element(By.CSS_SELECTOR, 'ul[da-id="hui-pagination"]')
-            if not pagination:
-                logger.warning("未找到分页器")
-                return None
+            if pagination:
+                # 找到所有 a 标签（页码链接）
+                page_links = pagination.find_elements(By.TAG_NAME, "a")
+                max_page = 0
+                for link in page_links:
+                    text = link.text.strip()
+                    if text.isdigit():
+                        page_num = int(text)
+                        max_page = max(max_page, page_num)
 
-            # 找到所有 li class="pageitem"
-            page_items = pagination.find_elements(By.CSS_SELECTOR, "li.pageitem")
-            if not page_items:
-                logger.warning("未找到分页项")
-                return None
+                if max_page > 0:
+                    logger.info(f"获取到最大页数: {max_page}")
+                    return max_page
 
-            # 倒数第三个li就是最大页数
+            # 方法2：尝试倒数第三个 li.pageitem
+            page_items = (
+                pagination.find_elements(By.CSS_SELECTOR, "li.pageitem") if pagination else []
+            )
             if len(page_items) >= 3:
                 last_page_item = page_items[-3]
                 page_text = last_page_item.text.strip()
-                try:
+                if page_text.isdigit():
                     max_page = int(page_text)
-                    logger.info(f"获取到最大页数: {max_page}")
+                    logger.info(f"获取到最大页数（方法2）: {max_page}")
                     return max_page
-                except ValueError:
-                    logger.error(f"无法解析页数: {page_text}")
-                    return None
-            else:
-                logger.warning(f"分页项数量不足: {len(page_items)}")
-                return 1  # 只有一页
+
+            logger.warning("未能获取到最大页数")
+            return None
 
         except Exception as e:
             logger.error(f"获取最大页数失败: {e}")

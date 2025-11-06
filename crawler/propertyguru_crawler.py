@@ -114,10 +114,16 @@ class PropertyGuruCrawler:
                 os.getenv("BROWSER_DISABLE_IMAGES", "true").lower() == "true"
             )  # 默认禁用图片
 
+            # 虚拟显示模式（有头模式但不显示窗口）
+            use_virtual_display = (
+                os.getenv("BROWSER_USE_VIRTUAL_DISPLAY", "false").lower() == "true"
+            )
+
             self.browser = UndetectedBrowser(
                 headless=headless,
                 version_main=int(version_main) if version_main else None,
                 disable_images=disable_images,
+                use_virtual_display=use_virtual_display,
             )
 
         elif browser_type == "local":
@@ -685,18 +691,28 @@ class PropertyGuruCrawler:
     def _filter_completed_listings(
         self, listings: list[ListingInfo]
     ) -> tuple[list[ListingInfo], int, int]:
-        """过滤已完成的房源"""
+        """过滤已完成的房源（批量查询优化）"""
         new_listings = []
         skipped_count = 0
         completed_count = 0
 
+        # 批量查询所有房源状态（优化：1次数据库查询替代N次）
+        status_dict = {}
+        if self.db_ops and listings:
+            listing_ids = [listing.listing_id for listing in listings]
+            status_dict = self.db_ops.batch_check_listings_status(listing_ids)
+            logger.debug(f"批量查询 {len(listing_ids)} 个房源状态完成")
+
         for listing in listings:
-            if self.db_ops and self.db_ops.check_listing_completed(listing.listing_id):
+            # 从批量查询结果获取状态
+            status = status_dict.get(listing.listing_id, {"exists": False, "is_completed": False})
+
+            if status["is_completed"]:
                 skipped_count += 1
                 completed_count += 1
                 self.progress.mark_listing_completed(listing.listing_id)
                 continue
-            if self.db_ops and self.db_ops.check_listing_exists(listing.listing_id):
+            if status["exists"]:
                 logger.debug(f"房源已存在但未完成，将重新爬取: {listing.listing_id}")
                 new_listings.append(listing)
                 continue
@@ -862,13 +878,14 @@ class PropertyGuruCrawler:
             max_pages: 最大爬取页数（None 表示不限制，但遇到已存在就停止）
         """
         import signal
+        import time
 
         # 信号处理：优雅退出
         should_stop: bool = False
 
         def signal_handler(_sig, _frame):
             nonlocal should_stop
-            logger.debug("\n收到退出信号，将在当前循环完成后退出...")
+            logger.info("\n收到退出信号 (Ctrl+C)，正在退出...")
             should_stop = True
 
         def check_should_stop() -> bool:
@@ -886,6 +903,10 @@ class PropertyGuruCrawler:
             logger.info("=" * 60)
 
             try:
+                # 开始计时
+                start_time = time.time()
+                self.progress.start_session()
+
                 self.connect_browser()
 
                 # 从第一页开始
@@ -899,9 +920,14 @@ class PropertyGuruCrawler:
                         end_page = actual_max_pages
                     else:
                         logger.error("无法获取最大页数，跳过本次循环")
-                        if interval_minutes > 0:
-                            logger.debug(f"等待 {interval_minutes} 分钟后继续...")
-                            await asyncio.sleep(interval_minutes * 60)
+                        if interval_minutes > 0 and not should_stop:
+                            logger.info(f"等待 {interval_minutes} 分钟后重试... (按 Ctrl+C 可退出)")
+                            # 分块睡眠，每10秒检查一次退出信号
+                            for _ in range(interval_minutes * 6):
+                                if should_stop:
+                                    logger.info("检测到退出信号，停止等待")  # type: ignore[unreachable]
+                                    break
+                                await asyncio.sleep(10)
                         continue
                 else:
                     # 如果指定了最大页数，使用较小的值
@@ -931,35 +957,44 @@ class PropertyGuruCrawler:
 
                     logger.debug(f"第 {page_num} 页找到 {len(listings)} 个房源")
 
-                    # 检查每个房源是否已存在
+                    # 批量查询所有房源状态（优化：1次数据库查询替代N次）
                     new_listings = []
-                    all_exist = True
+                    status_dict = {}
 
+                    if self.db_ops and listings:
+                        listing_ids = [listing.listing_id for listing in listings]
+                        status_dict = self.db_ops.batch_check_listings_status(listing_ids)
+                        logger.debug(f"批量查询 {len(listing_ids)} 个房源状态完成")
+
+                    # 遍历所有房源，收集新房源直到遇到已存在的
                     for listing in listings:
                         total_processed += 1
+                        # 从批量查询结果获取状态
+                        status = status_dict.get(
+                            listing.listing_id, {"exists": False, "is_completed": False}
+                        )
+
                         # 检查是否已存在且已完成
-                        if self.db_ops and self.db_ops.check_listing_completed(listing.listing_id):
-                            logger.debug(f"发现已存在的房源: {listing.listing_id}，停止爬取")
+                        if status["is_completed"]:
+                            logger.debug(
+                                f"发现已存在的房源: {listing.listing_id}，将在爬完前面的新房源后停止"
+                            )
                             stopped_at_existing = True
-                            all_exist = True
-                            break
+                            break  # 停止收集，但会爬完已收集的new_listings
                         # 如果存在但未完成，继续爬取
-                        if self.db_ops and self.db_ops.check_listing_exists(listing.listing_id):
+                        if status["exists"]:
                             logger.debug(f"房源已存在但未完成，将重新爬取: {listing.listing_id}")
                             new_listings.append(listing)
-                            all_exist = False
                         else:
+                            # 新房源，添加到待爬取列表
                             new_listings.append(listing)
-                            all_exist = False
-
-                    # 如果所有房源都已存在，停止爬取
-                    if stopped_at_existing or all_exist:
-                        logger.debug(f"第 {page_num} 页所有房源都已存在，停止爬取")
-                        break
 
                     if not new_listings:
-                        logger.debug(f"第 {page_num} 页没有新房源，继续下一页")
-                        continue
+                        logger.debug(f"第 {page_num} 页没有新房源")
+                        if stopped_at_existing:
+                            logger.info("已到达最新数据，停止爬取")
+                            break  # 没有新房源且遇到已存在的，停止
+                        continue  # 没有新房源但没遇到已存在的，继续下一页
 
                     logger.info(f"第 {page_num} 页待爬取房源: {len(new_listings)} 个")
 
@@ -1005,21 +1040,38 @@ class PropertyGuruCrawler:
                     )
                     logger.debug(f"{'=' * 60}")
 
+                    # 如果遇到已存在的房源，爬完当前页后停止
+                    if stopped_at_existing:
+                        logger.info("已爬完最新数据，遇到已存在的房源，停止继续")
+                        break
+
                 # 最后刷新所有缓冲区
                 if self.db_ops:
                     self.db_ops.flush_all()
+
+                # 计算耗时并保存统计
+                elapsed_time = time.time() - start_time
+                self.progress.end_session(success_count, elapsed_time)
 
                 logger.info("=" * 60)
                 logger.info("本次更新完成")
                 logger.info(
                     f"统计: 处理 {total_processed} 个房源, 成功 {success_count}, 失败 {fail_count}"
                 )
+                logger.info(f"耗时: {elapsed_time:.1f} 秒")
+                if success_count > 0:
+                    avg_time = elapsed_time / success_count
+                    logger.info(f"平均处理时间: {avg_time:.2f} 秒/房源")
                 if stopped_at_existing:
                     logger.info("停止原因: 遇到已存在的房源")
                 logger.info("=" * 60)
 
             except Exception as e:
                 logger.error(f"更新模式执行出错: {e}", exc_info=True)
+                # 如果是数据库连接错误，不退出，等待后重试
+                if "Lost connection to MySQL" in str(e) or "Can't connect to MySQL" in str(e):
+                    logger.warning("检测到数据库连接错误，将在下次循环时重试")
+                # 其他错误也不退出，继续循环
             finally:
                 # 关闭浏览器
                 if self.browser:
@@ -1027,8 +1079,17 @@ class PropertyGuruCrawler:
 
             # 如果设置了循环间隔，等待后继续
             if interval_minutes > 0 and not should_stop:
-                logger.debug(f"等待 {interval_minutes} 分钟后继续下一次循环...")
-                await asyncio.sleep(interval_minutes * 60)
+                logger.info(f"等待 {interval_minutes} 分钟后继续下一次循环... (按 Ctrl+C 可退出)")
+                # 分块睡眠，每10秒检查一次退出信号，确保能快速响应 Ctrl+C
+                for i in range(interval_minutes * 6):
+                    if should_stop:
+                        logger.info("检测到退出信号，停止等待")  # type: ignore[unreachable]
+                        break
+                    # 每分钟显示一次剩余时间
+                    if i % 6 == 0 and i > 0:
+                        remaining = interval_minutes - (i // 6)
+                        logger.debug(f"还需等待 {remaining} 分钟...")
+                    await asyncio.sleep(10)
             else:
                 # 只执行一次，退出循环
                 break

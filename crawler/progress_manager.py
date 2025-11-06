@@ -48,6 +48,9 @@ class CrawlProgress:
             "last_page": 0,
             "start_time": None,
             "last_update": None,
+            "total_processed": 0,
+            "total_time_seconds": 0.0,
+            "average_time_per_listing": 0.0,
         }
 
     def save_progress(self):
@@ -57,6 +60,9 @@ class CrawlProgress:
                 "last_page": self.progress_data.get("last_page", 0),
                 "start_time": self.progress_data.get("start_time"),
                 "last_update": self.progress_data.get("last_update"),
+                "total_processed": self.progress_data.get("total_processed", 0),
+                "total_time_seconds": self.progress_data.get("total_time_seconds", 0.0),
+                "average_time_per_listing": self.progress_data.get("average_time_per_listing", 0.0),
             }
             with self.progress_file.open("w", encoding="utf-8") as f:
                 json.dump(progress, f, indent=2, ensure_ascii=False)
@@ -128,12 +134,45 @@ class CrawlProgress:
         """获取失败房源数量（不再使用）"""
         return 0
 
+    def start_session(self):
+        """开始新的爬取会话（记录开始时间）"""
+        if not self.progress_data.get("start_time"):
+            self.progress_data["start_time"] = datetime.now().isoformat()
+            self.save_progress()
+            logger.info("爬取会话已开始，开始计时")
+
+    def end_session(self, total_processed: int, elapsed_seconds: float):
+        """
+        结束爬取会话并保存统计信息
+
+        Args:
+            total_processed: 处理的房产总数
+            elapsed_seconds: 总耗时（秒）
+        """
+        self.progress_data["total_processed"] = total_processed
+        self.progress_data["total_time_seconds"] = elapsed_seconds
+        if total_processed > 0:
+            average = elapsed_seconds / total_processed
+            self.progress_data["average_time_per_listing"] = round(average, 2)
+        else:
+            self.progress_data["average_time_per_listing"] = 0.0
+        self.progress_data["last_update"] = datetime.now().isoformat()
+        self.save_progress()
+        logger.info(
+            f"爬取会话结束 - 处理 {total_processed} 个房产，"
+            f"耗时 {elapsed_seconds:.1f} 秒，"
+            f"平均 {self.progress_data['average_time_per_listing']:.2f} 秒/房产"
+        )
+
     def reset(self):
         """重置进度"""
         self.progress_data = {
             "last_page": 0,
-            "start_time": datetime.now().isoformat(),
+            "start_time": None,
             "last_update": None,
+            "total_processed": 0,
+            "total_time_seconds": 0.0,
+            "average_time_per_listing": 0.0,
         }
         if self.progress_file.exists():
             self.progress_file.unlink()
