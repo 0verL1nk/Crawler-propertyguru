@@ -150,6 +150,10 @@ module = [
 ]
 ignore_missing_imports = true
 
+[[tool.mypy.overrides]]
+module = ["crawler.propertyguru_crawler"]
+warn_unreachable = false
+
 [tool.ruff]
 line-length = 100
 target-version = "py310"

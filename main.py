@@ -96,6 +96,19 @@ def run_normal_mode(crawler: PropertyGuruCrawler, start_page: int, end_page: int
     asyncio.run(crawler.run(start_page=start_page, end_page=end_page))
 
 
+def run_update_mode(
+    crawler: PropertyGuruCrawler, interval_minutes: int = 5, max_pages: int | None = None
+):
+    """运行更新模式：从第一页开始，遇到已存在的记录就停止，支持循环"""
+    logger.info("=" * 60)
+    logger.info("更新模式：从第一页开始爬取最新数据")
+    logger.info(f"循环间隔: {interval_minutes} 分钟" if interval_minutes > 0 else "只执行一次")
+    if max_pages:
+        logger.info(f"最大页数限制: {max_pages}")
+    logger.info("=" * 60)
+    asyncio.run(crawler.run_update_mode(interval_minutes=interval_minutes, max_pages=max_pages))
+
+
 def parse_args():
     """解析命令行参数"""
     parser = argparse.ArgumentParser(
@@ -103,12 +116,16 @@ def parse_args():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 示例:
-  python main.py --test-single          # 测试单个房源
-  python main.py --test-page             # 测试第一页
-  python main.py --test-pages 10         # 测试前10页
-  python main.py 1 100                   # 爬取第1-100页
-  python main.py 1                       # 从第1页开始爬取所有页
-  python main.py --reset-progress        # 重置进度
+  python main.py --test-single              # 测试单个房源
+  python main.py --test-page                # 测试第一页
+  python main.py --test-pages 10            # 测试前10页
+  python main.py 1 100                      # 爬取第1-100页
+  python main.py 1                          # 从第1页开始爬取所有页
+  python main.py --reset-progress           # 重置进度
+  python main.py --update-mode              # 更新模式（每5分钟循环一次）
+  python main.py --update-mode --interval 10 # 更新模式（每10分钟循环一次）
+  python main.py --update-mode --interval 0  # 更新模式（只执行一次）
+  python main.py --update-mode --max-pages 5 # 更新模式（最多爬5页）
         """,
     )
 
@@ -124,6 +141,24 @@ def parse_args():
 
     # 其他选项
     parser.add_argument("--reset-progress", action="store_true", help="重置爬取进度")
+    parser.add_argument(
+        "--update-mode",
+        action="store_true",
+        help="更新模式：从第一页开始，遇到已存在的记录就停止",
+    )
+    parser.add_argument(
+        "--interval",
+        type=int,
+        default=5,
+        metavar="MINUTES",
+        help="更新模式循环间隔（分钟），0 表示只执行一次（默认：5）",
+    )
+    parser.add_argument(
+        "--max-pages",
+        type=int,
+        metavar="N",
+        help="更新模式最大爬取页数（默认：不限制，但遇到已存在就停止）",
+    )
 
     # 位置参数：起始页和结束页
     parser.add_argument("start_page", type=int, nargs="?", default=None, help="起始页码（默认：1）")
@@ -156,6 +191,9 @@ def main():
             run_test_page(crawler)
         elif args.test_pages:
             run_test_pages(crawler, args.test_pages)
+        elif args.update_mode:
+            # 更新模式
+            run_update_mode(crawler, interval_minutes=args.interval, max_pages=args.max_pages)
         else:
             # 正常模式
             start_page = args.start_page if args.start_page is not None else 1

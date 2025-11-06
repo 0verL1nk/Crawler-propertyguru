@@ -780,12 +780,18 @@ class UndetectedBrowser:
 
             # 禁用图片和其他资源加载（提升性能）
             if self.disable_images:
-                logger.info("已启用资源优化：禁用图片、CSS、字体加载")
+                logger.info("已启用资源优化：禁用图片、CSS、字体、视频加载")
                 prefs = {
                     "profile.managed_default_content_settings.images": 2,  # 禁用图片
                     "profile.managed_default_content_settings.stylesheets": 2,  # 禁用CSS
                     "profile.managed_default_content_settings.fonts": 2,  # 禁用字体
-                    "profile.managed_default_content_settings.media": 2,  # 禁用视频
+                    "profile.managed_default_content_settings.media_stream": 2,  # 禁用媒体流
+                    "profile.managed_default_content_settings.media_stream_mic": 2,  # 禁用麦克风
+                    "profile.managed_default_content_settings.media_stream_camera": 2,  # 禁用摄像头
+                    "profile.default_content_setting_values.media_stream_mic": 2,
+                    "profile.default_content_setting_values.media_stream_camera": 2,
+                    "profile.default_content_setting_values.autoplay": 2,  # 禁用自动播放
+                    "profile.default_content_setting_values.notifications": 2,  # 禁用通知
                 }
                 options.add_experimental_option("prefs", prefs)
 
@@ -793,6 +799,20 @@ class UndetectedBrowser:
                 options.add_argument("--blink-settings=imagesEnabled=false")
                 options.add_argument("--disable-extensions")
                 options.add_argument("--disable-plugins")
+                options.add_argument("--mute-audio")  # 静音
+                options.add_argument("--disable-background-networking")
+                options.add_argument("--disable-background-timer-throttling")
+                options.add_argument("--disable-renderer-backgrounding")
+                options.add_argument("--disable-backgrounding-occluded-windows")
+                options.add_argument("--disable-component-update")
+                options.add_argument("--disable-default-apps")
+                options.add_argument("--disable-sync")
+                options.add_argument("--disable-translate")
+                options.add_argument("--hide-scrollbars")
+                options.add_argument("--metrics-recording-only")
+                options.add_argument("--no-first-run")
+                options.add_argument("--safebrowsing-disable-auto-update")
+                options.add_argument("--disable-ipc-flooding-protection")
 
             # 准备参数
             uc_options: dict[str, Any] = {}
@@ -811,6 +831,110 @@ class UndetectedBrowser:
 
             # 创建undetected Chrome驱动
             self.driver = uc.Chrome(**uc_options)
+
+            # 如果禁用了图片，通过 CDP 进一步禁用媒体
+            if self.disable_images:
+                try:
+                    # 禁用媒体自动播放和阻止视频/音频元素
+                    self.driver.execute_cdp_cmd(
+                        "Page.addScriptToEvaluateOnNewDocument",
+                        {
+                            "source": """
+                                // 禁用媒体设备 API
+                                Object.defineProperty(navigator, 'mediaDevices', {
+                                    get: () => undefined
+                                });
+                                Object.defineProperty(navigator, 'getUserMedia', {
+                                    get: () => undefined
+                                });
+                                Object.defineProperty(navigator, 'webkitGetUserMedia', {
+                                    get: () => undefined
+                                });
+                                Object.defineProperty(navigator, 'mozGetUserMedia', {
+                                    get: () => undefined
+                                });
+                                Object.defineProperty(navigator, 'msGetUserMedia', {
+                                    get: () => undefined
+                                });
+
+                                // 阻止 video 和 audio 元素加载
+                                (function() {
+                                    const originalCreateElement = document.createElement;
+                                    document.createElement = function(tagName) {
+                                        const element = originalCreateElement.call(document, tagName);
+                                        if (tagName.toLowerCase() === 'video' || tagName.toLowerCase() === 'audio') {
+                                            element.remove();
+                                            return originalCreateElement.call(document, 'div');
+                                        }
+                                        return element;
+                                    };
+
+                                    // 阻止现有视频/音频元素加载
+                                    const observer = new MutationObserver(function(mutations) {
+                                        mutations.forEach(function(mutation) {
+                                            mutation.addedNodes.forEach(function(node) {
+                                                if (node.nodeName === 'VIDEO' || node.nodeName === 'AUDIO') {
+                                                    node.remove();
+                                                }
+                                            });
+                                        });
+                                    });
+                                    observer.observe(document.body || document.documentElement, {
+                                        childList: true,
+                                        subtree: true
+                                    });
+                                })();
+                            """
+                        },
+                    )
+                    # 启用 Network 域并阻止媒体资源
+                    try:
+                        self.driver.execute_cdp_cmd("Network.enable", {})
+                        # 阻止视频和音频资源加载
+                        self.driver.execute_cdp_cmd(
+                            "Network.setBlockedURLs",
+                            {
+                                "urls": [
+                                    "*.mp4",
+                                    "*.webm",
+                                    "*.ogg",
+                                    "*.avi",
+                                    "*.mov",
+                                    "*.wmv",
+                                    "*.flv",
+                                    "*.mkv",
+                                    "*.m4v",
+                                    "*.3gp",
+                                ]
+                            },
+                        )
+                    except Exception as network_error:
+                        logger.debug(f"Network 域设置失败（不影响使用）: {network_error}")
+
+                    # 设置内容设置，禁用媒体权限
+                    try:
+                        self.driver.execute_cdp_cmd(
+                            "Browser.setPermission",
+                            {
+                                "origin": "https://*",
+                                "permission": {"name": "camera"},
+                                "setting": "denied",
+                            },
+                        )
+                        self.driver.execute_cdp_cmd(
+                            "Browser.setPermission",
+                            {
+                                "origin": "https://*",
+                                "permission": {"name": "microphone"},
+                                "setting": "denied",
+                            },
+                        )
+                    except Exception as perm_error:
+                        logger.debug(f"权限设置失败（不影响使用）: {perm_error}")
+
+                    logger.debug("已通过 CDP 禁用媒体访问和资源加载")
+                except Exception as e:
+                    logger.warning(f"通过 CDP 禁用媒体失败（不影响使用）: {e}")
 
             logger.info("Undetected浏览器启动成功")
 

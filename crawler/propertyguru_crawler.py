@@ -6,6 +6,7 @@ PropertyGuru爬虫主类
 
 from __future__ import annotations
 
+import asyncio
 import os
 import time
 from typing import TYPE_CHECKING, Any
@@ -78,7 +79,7 @@ class PropertyGuruCrawler:
 
         # 如果没有设置代理URL且配置中未启用代理，则确认不使用代理
         if not os.getenv("PROXY_URL") and not self.use_proxy:
-            logger.info("检测到未配置代理（proxy.enabled=false 且未设置 PROXY_URL），将使用直连IP")
+            logger.debug("检测到未配置代理（proxy.enabled=false 且未设置 PROXY_URL），将使用直连IP")
 
         # 直连IP时的配置（不使用代理时）
         self.direct_ip_limit_per_page = (
@@ -106,7 +107,7 @@ class PropertyGuruCrawler:
 
         if browser_type == "undetected":
             # 使用 Undetected Chrome（推荐用于反爬虫检测）
-            logger.info("使用 Undetected Chrome 浏览器（反检测模式）")
+            logger.debug("使用 Undetected Chrome 浏览器（反检测模式）")
             headless = os.getenv("BROWSER_HEADLESS", "false").lower() == "true"
             version_main = os.getenv("CHROME_VERSION")  # 可选：指定Chrome版本
             disable_images = (
@@ -121,7 +122,7 @@ class PropertyGuruCrawler:
 
         elif browser_type == "local":
             # 使用本地浏览器（测试）
-            logger.info("使用本地浏览器模式（测试）")
+            logger.debug("使用本地浏览器模式（测试）")
             headless = os.getenv("BROWSER_HEADLESS", "false").lower() == "true"
             self.browser = LocalBrowser(headless=headless)
 
@@ -136,7 +137,7 @@ class PropertyGuruCrawler:
                     "  - 使用本地浏览器：设置 BROWSER_TYPE=local\n"
                     "  - 使用反检测浏览器：设置 BROWSER_TYPE=undetected"
                 )
-            logger.info("使用远程浏览器模式（Bright Data）")
+            logger.debug("使用远程浏览器模式（Bright Data）")
             self.browser = RemoteBrowser(auth=browser_auth)
 
     def _init_database(self):
@@ -163,14 +164,14 @@ class PropertyGuruCrawler:
 
             try:
                 proxy_manager = ProxyManager(proxy_config)
-                logger.info("将使用直连IP代理池（动态获取）")
+                logger.debug("将使用直连IP代理池（动态获取）")
             except Exception as e:
                 logger.warning(f"初始化直连IP代理池失败，将使用环境变量配置: {e}")
 
         if not proxy_manager:
             direct_proxy_url = os.getenv("PROXY_DIRECT_URL")
             if direct_proxy_url:
-                logger.info("将使用直连代理（PROXY_DIRECT_URL）")
+                logger.debug("将使用直连代理（PROXY_DIRECT_URL）")
 
         return proxy_manager, direct_proxy_url
 
@@ -274,7 +275,7 @@ class PropertyGuruCrawler:
             if not self.browser:
                 raise RuntimeError("浏览器未初始化")
             url = f"{self.BASE_URL}/{page_num}"
-            logger.info(f"爬取列表页: {url}")
+            logger.debug(f"爬取列表页: {url}")
 
             self.browser.get(url)
 
@@ -290,17 +291,17 @@ class PropertyGuruCrawler:
 
             listings = []
             total_cards = len(cards_html)
-            logger.info(f"开始解析 {total_cards} 个房产卡片（使用HTML缓存优化）...")
+            logger.debug(f"开始解析 {total_cards} 个房产卡片（使用HTML缓存优化）...")
 
             for idx, card_html in enumerate(cards_html, 1):
-                logger.info(f"解析第 {idx}/{total_cards} 个卡片...")
+                logger.debug(f"解析第 {idx}/{total_cards} 个卡片...")
                 try:
                     listing = parser.parse_listing_card_html(card_html)
                     if listing:
                         listings.append(listing)
-                        logger.info(f"✓ 成功解析: {listing.listing_id} - {listing.title}")
+                        logger.debug(f"✓ 成功解析: {listing.listing_id} - {listing.title}")
                     else:
-                        logger.warning(f"✗ 解析失败: 第 {idx} 个卡片（返回 None）")
+                        logger.debug(f"✗ 解析失败: 第 {idx} 个卡片（返回 None）")
                 except Exception as e:
                     logger.warning(f"解析第 {idx} 个卡片时出错: {e}", exc_info=True)
                     continue
@@ -325,7 +326,7 @@ class PropertyGuruCrawler:
         try:
             if not self.browser:
                 raise RuntimeError("浏览器未初始化")
-            logger.info(f"爬取详情页: {detail_url}")
+            logger.debug(f"爬取详情页: {detail_url}")
 
             # 添加延迟，避免导航限制
             time.sleep(2)
@@ -355,12 +356,12 @@ class PropertyGuruCrawler:
             parser = DetailPageParser(self.browser)
 
             # 提取所有信息
-            logger.info("开始提取详情页数据")
+            logger.debug("开始提取详情页数据")
             property_details = parser.extract_property_details()
-            logger.info(f"Property details提取结果: {property_details is not None}")
+            logger.debug(f"Property details提取结果: {property_details is not None}")
 
             description_title, description = parser.extract_property_description()
-            logger.info(
+            logger.debug(
                 f"Description提取结果 - title: {description_title is not None}, description: {description is not None}"
             )
 
@@ -374,7 +375,7 @@ class PropertyGuruCrawler:
                 listing_id = parser._extract_listing_id_from_url()
 
                 if listing_id:
-                    logger.info(
+                    logger.debug(
                         f"property_details提取失败，但找到listing_id: {listing_id}，创建空的PropertyDetails对象"
                     )
                     from .models import PropertyDetails
@@ -450,7 +451,7 @@ class PropertyGuruCrawler:
             raise RuntimeError("数据库操作未初始化")
         if detail_data.get("property_details"):
             details = detail_data["property_details"]
-            logger.info(
+            logger.debug(
                 f"准备保存PropertyDetails - listing_id: {details.listing_id}, "
                 f"property_details字段数: {len(details.property_details) if details.property_details else 0}, "
                 f"description: {len(details.description) if details.description else 0} chars, "
@@ -460,7 +461,7 @@ class PropertyGuruCrawler:
             )
             success = self.db_ops.save_property_details(details)
             if success:
-                logger.info(f"PropertyDetails保存成功: {details.listing_id}")
+                logger.debug(f"PropertyDetails保存成功: {details.listing_id}")
             else:
                 logger.warning(f"PropertyDetails保存失败: {details.listing_id}")
         else:
@@ -497,7 +498,7 @@ class PropertyGuruCrawler:
 
             # 所有数据保存成功后，标记为已完成
             self.db_ops.mark_listing_completed(listing.listing_id)
-            logger.info(f"房源数据已保存并标记为完成: {listing.listing_id}")
+            logger.debug(f"房源数据已保存并标记为完成: {listing.listing_id}")
 
         except Exception as e:
             logger.error(f"保存房源数据失败: {listing.listing_id}, 错误: {e}")
@@ -663,7 +664,7 @@ class PropertyGuruCrawler:
     def _determine_end_page(self, end_page: int | None) -> int | None:
         """确定结束页码"""
         if end_page is None:
-            logger.info("获取最大页数...")
+            logger.debug("获取最大页数...")
             max_pages = self.get_max_pages()
             if not max_pages:
                 logger.error("无法获取最大页数")
@@ -676,7 +677,7 @@ class PropertyGuruCrawler:
         """根据进度记录调整起始页码"""
         last_page = self.progress.get_last_page()
         if last_page > 0 and start_page <= last_page:
-            logger.info(f"发现进度记录，上次完成到第 {last_page} 页")
+            logger.debug(f"发现进度记录，上次完成到第 {last_page} 页")
             logger.info(f"将从第 {last_page + 1} 页继续爬取")
             return max(start_page, last_page + 1)
         return start_page
@@ -717,27 +718,27 @@ class PropertyGuruCrawler:
         # 如果使用直连IP（不使用代理），限制每次只爬取一个房源
         original_count = len(listings)
         if not self.use_proxy:
-            logger.info("=" * 60)
-            logger.info("⚠️  检测到使用直连IP（不使用代理）")
-            logger.info(f"   限制每页只爬取 {self.direct_ip_limit_per_page} 个房源")
-            logger.info(f"   每个房源之间延迟 {self.direct_ip_delay} 秒")
-            logger.info("=" * 60)
+            logger.debug("=" * 60)
+            logger.debug("⚠️  检测到使用直连IP（不使用代理）")
+            logger.debug(f"   限制每页只爬取 {self.direct_ip_limit_per_page} 个房源")
+            logger.debug(f"   每个房源之间延迟 {self.direct_ip_delay} 秒")
+            logger.debug("=" * 60)
             # 限制列表长度
             if original_count > self.direct_ip_limit_per_page:
-                logger.info(
+                logger.debug(
                     f"   本页共有 {original_count} 个房源，仅爬取前 {self.direct_ip_limit_per_page} 个"
                 )
             listings = listings[: self.direct_ip_limit_per_page]
 
         for idx, listing in enumerate(listings, 1):
-            logger.info(
+            logger.debug(
                 f"[{page_num}/{end_page}] [{idx}/{len(listings)}] 爬取房源: {listing.listing_id}"
             )
 
             success = await self.crawl_listing(listing)
             if success:
                 success_count += 1
-                logger.info(f"✅ 成功: {listing.listing_id}")
+                logger.debug(f"✅ 成功: {listing.listing_id}")
             else:
                 fail_count += 1
                 logger.warning(f"❌ 失败: {listing.listing_id}")
@@ -777,29 +778,29 @@ class PropertyGuruCrawler:
             failed_before = self.progress.get_failed_count()
 
             for page_num in range(start_page, end_page + 1):
-                logger.info(f"{'=' * 60}")
+                logger.debug(f"{'=' * 60}")
                 logger.info(f"开始爬取第 {page_num}/{end_page} 页")
-                logger.info(f"{'=' * 60}")
+                logger.debug(f"{'=' * 60}")
 
                 listings = self.crawl_listing_page(page_num)
                 if not listings:
                     logger.warning(f"第 {page_num} 页没有找到房源")
                     continue
 
-                logger.info(f"第 {page_num} 页找到 {len(listings)} 个房源")
+                logger.debug(f"第 {page_num} 页找到 {len(listings)} 个房源")
 
                 new_listings, skipped_count, completed_count = self._filter_completed_listings(
                     listings
                 )
 
                 if skipped_count > 0:
-                    logger.info(
+                    logger.debug(
                         f"跳过已完成的房源: {completed_count} 个 "
                         f"（已完成）, {skipped_count - completed_count} 个（其他原因）"
                     )
 
                 if not new_listings:
-                    logger.info(f"第 {page_num} 页所有房源已完成，跳过")
+                    logger.debug(f"第 {page_num} 页所有房源已完成，跳过")
                     self.progress.mark_page_completed(page_num)
                     continue
 
@@ -816,14 +817,15 @@ class PropertyGuruCrawler:
                     self.db_ops.flush_all()
                 self.progress.mark_page_completed(page_num)
 
-                logger.info(f"{'=' * 60}")
-                logger.info(f"第 {page_num} 页爬取完成")
-                logger.info(f"本页统计: 成功 {page_success}/{len(new_listings)}, 失败 {page_fail}")
+                logger.debug(f"{'=' * 60}")
                 logger.info(
+                    f"第 {page_num} 页爬取完成 - 成功 {page_success}/{len(new_listings)}, 失败 {page_fail}"
+                )
+                logger.debug(
                     f"总进度: 已完成 {self.progress.get_completed_count()} 个房源, "
                     f"失败 {self.progress.get_failed_count()} 个房源"
                 )
-                logger.info(f"{'=' * 60}")
+                logger.debug(f"{'=' * 60}")
 
             # 最后刷新所有缓冲区
             if self.db_ops:
@@ -849,6 +851,189 @@ class PropertyGuruCrawler:
             # 关闭浏览器
             if self.browser:
                 self.browser.close()
+
+    async def run_update_mode(self, interval_minutes: int = 5, max_pages: int | None = None):
+        """
+        更新模式：从第一页开始爬取最新数据，遇到已存在的记录就停止
+        支持循环模式，每隔指定分钟执行一次
+
+        Args:
+            interval_minutes: 循环间隔（分钟），0 表示只执行一次
+            max_pages: 最大爬取页数（None 表示不限制，但遇到已存在就停止）
+        """
+        import signal
+
+        # 信号处理：优雅退出
+        should_stop: bool = False
+
+        def signal_handler(_sig, _frame):
+            nonlocal should_stop
+            logger.debug("\n收到退出信号，将在当前循环完成后退出...")
+            should_stop = True
+
+        def check_should_stop() -> bool:
+            """检查是否应该停止（帮助 mypy 理解可达性）"""
+            return should_stop
+
+        signal.signal(signal.SIGINT, signal_handler)
+        signal.signal(signal.SIGTERM, signal_handler)
+
+        iteration = 0
+        while not should_stop:
+            iteration += 1
+            logger.info("=" * 60)
+            logger.info(f"更新模式 - 第 {iteration} 次循环")
+            logger.info("=" * 60)
+
+            try:
+                self.connect_browser()
+
+                # 从第一页开始
+                start_page = 1
+                end_page = max_pages if max_pages else None
+
+                # 如果指定了最大页数，先获取实际最大页数
+                if end_page is None:
+                    actual_max_pages = self.get_max_pages()
+                    if actual_max_pages:
+                        end_page = actual_max_pages
+                    else:
+                        logger.error("无法获取最大页数，跳过本次循环")
+                        if interval_minutes > 0:
+                            logger.debug(f"等待 {interval_minutes} 分钟后继续...")
+                            await asyncio.sleep(interval_minutes * 60)
+                        continue
+                else:
+                    # 如果指定了最大页数，使用较小的值
+                    actual_max_pages = self.get_max_pages()
+                    if actual_max_pages:
+                        end_page = min(end_page, actual_max_pages)
+
+                logger.debug(f"开始爬取，页码范围: {start_page} - {end_page}")
+                success_count = 0
+                fail_count = 0
+                total_processed = 0
+                stopped_at_existing = False
+
+                for page_num in range(start_page, end_page + 1):
+                    if check_should_stop():
+                        logger.debug("收到停止信号，退出爬取")
+                        break
+
+                    logger.debug(f"{'=' * 60}")
+                    logger.debug(f"开始爬取第 {page_num}/{end_page} 页")
+                    logger.debug(f"{'=' * 60}")
+
+                    listings = self.crawl_listing_page(page_num)
+                    if not listings:
+                        logger.warning(f"第 {page_num} 页没有找到房源")
+                        continue
+
+                    logger.debug(f"第 {page_num} 页找到 {len(listings)} 个房源")
+
+                    # 检查每个房源是否已存在
+                    new_listings = []
+                    all_exist = True
+
+                    for listing in listings:
+                        total_processed += 1
+                        # 检查是否已存在且已完成
+                        if self.db_ops and self.db_ops.check_listing_completed(listing.listing_id):
+                            logger.debug(f"发现已存在的房源: {listing.listing_id}，停止爬取")
+                            stopped_at_existing = True
+                            all_exist = True
+                            break
+                        # 如果存在但未完成，继续爬取
+                        if self.db_ops and self.db_ops.check_listing_exists(listing.listing_id):
+                            logger.debug(f"房源已存在但未完成，将重新爬取: {listing.listing_id}")
+                            new_listings.append(listing)
+                            all_exist = False
+                        else:
+                            new_listings.append(listing)
+                            all_exist = False
+
+                    # 如果所有房源都已存在，停止爬取
+                    if stopped_at_existing or all_exist:
+                        logger.debug(f"第 {page_num} 页所有房源都已存在，停止爬取")
+                        break
+
+                    if not new_listings:
+                        logger.debug(f"第 {page_num} 页没有新房源，继续下一页")
+                        continue
+
+                    logger.info(f"第 {page_num} 页待爬取房源: {len(new_listings)} 个")
+
+                    # 爬取当前页的房源
+                    page_success = 0
+                    page_fail = 0
+
+                    for idx, listing in enumerate(new_listings, 1):
+                        if check_should_stop():
+                            break
+
+                        logger.debug(
+                            f"[{page_num}/{end_page}] [{idx}/{len(new_listings)}] "
+                            f"爬取房源: {listing.listing_id}"
+                        )
+
+                        success = await self.crawl_listing(listing)
+                        if success:
+                            page_success += 1
+                            success_count += 1
+                            logger.debug(f"✅ 成功: {listing.listing_id}")
+                        else:
+                            page_fail += 1
+                            fail_count += 1
+                            logger.warning(f"❌ 失败: {listing.listing_id}")
+
+                        # 延迟
+                        if idx < len(new_listings):
+                            delay = self.direct_ip_delay if not self.use_proxy else 2
+                            logger.debug(f"等待 {delay} 秒后继续...")
+                            await asyncio.sleep(delay)
+
+                    success_count += page_success
+                    fail_count += page_fail
+
+                    if self.db_ops:
+                        self.db_ops.flush_all()
+                    self.progress.mark_page_completed(page_num)
+
+                    logger.debug(f"{'=' * 60}")
+                    logger.info(
+                        f"第 {page_num} 页爬取完成 - 成功 {page_success}/{len(new_listings)}, 失败 {page_fail}"
+                    )
+                    logger.debug(f"{'=' * 60}")
+
+                # 最后刷新所有缓冲区
+                if self.db_ops:
+                    self.db_ops.flush_all()
+
+                logger.info("=" * 60)
+                logger.info("本次更新完成")
+                logger.info(
+                    f"统计: 处理 {total_processed} 个房源, 成功 {success_count}, 失败 {fail_count}"
+                )
+                if stopped_at_existing:
+                    logger.info("停止原因: 遇到已存在的房源")
+                logger.info("=" * 60)
+
+            except Exception as e:
+                logger.error(f"更新模式执行出错: {e}", exc_info=True)
+            finally:
+                # 关闭浏览器
+                if self.browser:
+                    self.browser.close()
+
+            # 如果设置了循环间隔，等待后继续
+            if interval_minutes > 0 and not should_stop:
+                logger.debug(f"等待 {interval_minutes} 分钟后继续下一次循环...")
+                await asyncio.sleep(interval_minutes * 60)
+            else:
+                # 只执行一次，退出循环
+                break
+
+        logger.info("更新模式已停止")
 
     def close(self):
         """关闭所有资源"""
