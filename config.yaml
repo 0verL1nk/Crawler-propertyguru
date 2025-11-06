@@ -63,12 +63,14 @@ database:
     # 如果提供了完整连接URI，可以使用 uri 字段（SSL参数通过上述配置传递）
     # uri: "mysql+pymysql://user:pass@host:port/db?charset=utf8mb4"
 
-  # Redis配置（用于缓存和队列）
-  redis:
-    host: "localhost"
-    port: 6379
-    db: 0
-    password: ""
+  # Redis配置（可选 - 用于缓存和队列）
+  # 如需使用 Redis，请先安装: pip install redis>=5.0.0
+  # 然后取消下面的注释
+  # redis:
+  #   host: "localhost"
+  #   port: 6379
+  #   db: 0
+  #   password: ""
 
 # 对象存储配置（支持S3和兼容S3的服务，如七牛云）
 s3:

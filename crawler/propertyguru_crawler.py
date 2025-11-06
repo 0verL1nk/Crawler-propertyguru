@@ -17,7 +17,7 @@ from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_ex
 
 from utils.logger import get_logger
 
-from .browser import LocalBrowser, RemoteBrowser
+from .browser import LocalBrowser, RemoteBrowser, UndetectedBrowser
 from .database import DatabaseManager
 from .db_operations import DBOperations
 
@@ -48,7 +48,7 @@ class PropertyGuruCrawler:
         self.config = config
 
         # 初始化组件
-        self.browser: RemoteBrowser | LocalBrowser | None = None
+        self.browser: RemoteBrowser | LocalBrowser | UndetectedBrowser | None = None
         self.db_manager: DatabaseManager | None = None
         self.db_ops: DBOperations | None = None
         self.storage_manager: StorageManagerProtocol | None = None
@@ -101,18 +101,42 @@ class PropertyGuruCrawler:
 
     def _init_browser(self):
         """初始化浏览器"""
-        use_local_browser = os.getenv("USE_LOCAL_BROWSER", "false").lower() == "true"
+        # 检查浏览器类型配置
+        browser_type = os.getenv("BROWSER_TYPE", "remote").lower()
 
-        if use_local_browser:
+        if browser_type == "undetected":
+            # 使用 Undetected Chrome（推荐用于反爬虫检测）
+            logger.info("使用 Undetected Chrome 浏览器（反检测模式）")
+            headless = os.getenv("BROWSER_HEADLESS", "false").lower() == "true"
+            version_main = os.getenv("CHROME_VERSION")  # 可选：指定Chrome版本
+            disable_images = (
+                os.getenv("BROWSER_DISABLE_IMAGES", "true").lower() == "true"
+            )  # 默认禁用图片
+
+            self.browser = UndetectedBrowser(
+                headless=headless,
+                version_main=int(version_main) if version_main else None,
+                disable_images=disable_images,
+            )
+
+        elif browser_type == "local":
+            # 使用本地浏览器（测试）
             logger.info("使用本地浏览器模式（测试）")
             headless = os.getenv("BROWSER_HEADLESS", "false").lower() == "true"
             self.browser = LocalBrowser(headless=headless)
+
         else:
+            # 使用远程浏览器（Bright Data）
             browser_auth = os.getenv("BROWSER_AUTH")
             if not browser_auth:
                 raise ValueError(
-                    "未配置BROWSER_AUTH环境变量（如需使用本地浏览器，请设置 USE_LOCAL_BROWSER=true）"
+                    "未配置BROWSER_AUTH环境变量\n"
+                    "提示：\n"
+                    "  - 使用远程浏览器：配置 BROWSER_AUTH\n"
+                    "  - 使用本地浏览器：设置 BROWSER_TYPE=local\n"
+                    "  - 使用反检测浏览器：设置 BROWSER_TYPE=undetected"
                 )
+            logger.info("使用远程浏览器模式（Bright Data）")
             self.browser = RemoteBrowser(auth=browser_auth)
 
     def _init_database(self):
@@ -707,8 +731,7 @@ class PropertyGuruCrawler:
 
         for idx, listing in enumerate(listings, 1):
             logger.info(
-                f"[{page_num}/{end_page}] [{idx}/{len(listings)}] "
-                f"爬取房源: {listing.listing_id}"
+                f"[{page_num}/{end_page}] [{idx}/{len(listings)}] 爬取房源: {listing.listing_id}"
             )
 
             success = await self.crawl_listing(listing)

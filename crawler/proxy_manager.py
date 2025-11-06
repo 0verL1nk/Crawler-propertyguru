@@ -222,8 +222,7 @@ class ProxyManager:
                 loaded_count += 1
 
             logger.info(
-                f"从持久化文件加载了 {loaded_count} 个有效IP，"
-                f"跳过了 {expired_count} 个过期/失效IP"
+                f"从持久化文件加载了 {loaded_count} 个有效IP，跳过了 {expired_count} 个过期/失效IP"
             )
         except Exception as e:
             logger.warning(f"加载IP池持久化文件失败: {e}，将重新获取IP")

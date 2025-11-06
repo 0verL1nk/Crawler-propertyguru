@@ -1,6 +1,6 @@
 """
 数据库管理模块
-支持 MySQL, MongoDB, Redis
+支持 MySQL, MongoDB, Redis（可选）
 """
 
 from __future__ import annotations
@@ -12,10 +12,18 @@ if TYPE_CHECKING:
     from collections.abc import Generator
 
 import pymongo
-import redis
 from sqlalchemy import Engine, create_engine, text
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import QueuePool
+
+# Redis 为可选依赖
+try:
+    import redis
+
+    REDIS_AVAILABLE = True
+except ImportError:
+    redis = None
+    REDIS_AVAILABLE = False
 
 from utils.logger import get_logger
 
@@ -462,7 +470,7 @@ class _CursorWrapper:
 
 
 class RedisManager:
-    """Redis管理器"""
+    """Redis管理器（需要安装 redis 包）"""
 
     def __init__(self, config: dict):
         """
@@ -470,7 +478,15 @@ class RedisManager:
 
         Args:
             config: Redis配置
+
+        Raises:
+            ImportError: 如果 redis 包未安装
         """
+        if not REDIS_AVAILABLE:
+            raise ImportError(
+                "Redis support requires 'redis' package. Install it with: pip install redis>=5.0.0"
+            )
+
         self.config = config
         self.client: redis.Redis | None = None
         self._connect()
@@ -548,7 +564,7 @@ class RedisManager:
                 raise RuntimeError("Redis未初始化")
             result = self.client.delete(*keys)
             # redis-py 同步客户端返回 int
-            return result  # type: ignore[return-value]
+            return int(result)
         except Exception as e:
             logger.error(f"Redis DELETE失败: {e}")
             raise
@@ -573,7 +589,7 @@ class RedisManager:
                 raise RuntimeError("Redis未初始化")
             result = self.client.lpush(key, *values)
             # redis-py 同步客户端返回 int
-            return result  # type: ignore[return-value]
+            return int(result)
         except Exception as e:
             logger.error(f"Redis LPUSH失败: {e}")
             raise
@@ -628,6 +644,9 @@ class DatabaseManager:
         if redis_config:
             try:
                 self.redis = RedisManager(redis_config)
+            except ImportError as e:
+                logger.warning(f"Redis不可用: {e}")
+                logger.info("如需使用Redis，请安装: pip install redis>=5.0.0")
             except Exception as e:
                 logger.warning(f"Redis初始化失败: {e}")
 
