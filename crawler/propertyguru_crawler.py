@@ -815,6 +815,10 @@ class PropertyGuruCrawler:
             success_count = 0
             fail_count = 0
 
+            # 记录开始时间
+            start_time = time.time()
+            self.progress.start_session()
+
             # 记录初始统计信息（用于计算新增数量）
             completed_before = self.progress.get_completed_count()
             failed_before = self.progress.get_failed_count()
@@ -873,9 +877,16 @@ class PropertyGuruCrawler:
             if self.db_ops:
                 self.db_ops.flush_all()
 
+            # 计算耗时并保存统计
+            elapsed_time = time.time() - start_time
+            self.progress.end_session(success_count, elapsed_time)
+
             logger.info(f"{'=' * 60}")
             logger.info("爬取完成")
-            logger.info(f"本页统计: 成功 {success_count}/{total_listings}, 失败 {fail_count}")
+            logger.info(f"本次统计: 成功 {success_count}/{total_listings}, 失败 {fail_count}")
+            logger.info(
+                f"总耗时: {elapsed_time:.1f} 秒, 平均: {elapsed_time/success_count if success_count > 0 else 0:.2f} 秒/房源"
+            )
             logger.info(
                 f"总进度: 已完成 {self.progress.get_completed_count()} 个房源 "
                 f"（本次新增 {self.progress.get_completed_count() - completed_before} 个）"
