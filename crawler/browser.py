@@ -488,9 +488,25 @@ class LocalBrowser:
 
         self.headless = headless
         self.options = options or Options()
+        self.display: Any = None  # 虚拟显示
+
+        # 添加必要的稳定性参数（树莓派/ARM64 必需）
+        stability_args = [
+            "--no-sandbox",
+            "--disable-dev-shm-usage",
+            "--disable-gpu",
+            "--disable-software-rasterizer",
+            "--disable-setuid-sandbox",
+        ]
+        for arg in stability_args:
+            self.options.add_argument(arg)
+
         if headless:
-            self.options.add_argument("--headless")
-            self.options.add_argument("--disable-gpu")
+            self.options.add_argument("--headless=new")
+            self.options.add_argument("--window-size=1920,1080")
+        else:
+            # 有头模式也需要窗口大小
+            self.options.add_argument("--window-size=1920,1080")
 
         # 浏览器驱动
         self.driver: Chrome | None = None
@@ -511,8 +527,44 @@ class LocalBrowser:
             if options is None:
                 options = self.options
 
+            # 检查是否需要启动虚拟显示（有头模式且无 DISPLAY）
+            import os
+
+            if not self.headless and not os.getenv("DISPLAY"):
+                try:
+                    from pyvirtualdisplay import Display
+
+                    self.display = Display(visible=False, size=(1920, 1080))
+                    self.display.start()
+                    logger.info("虚拟显示已启动（有头模式但不显示窗口）")
+                except ImportError:
+                    logger.warning(
+                        "pyvirtualdisplay 未安装，将使用无头模式。"
+                        "安装方法：uv pip install pyvirtualdisplay"
+                    )
+                    options.add_argument("--headless=new")
+                except Exception as e:
+                    logger.warning(f"启动虚拟显示失败: {e}，将使用无头模式")
+                    options.add_argument("--headless=new")
+
+            # 检查是否有自定义的 ChromeDriver 路径
+            from selenium.webdriver.chrome.service import Service
+
+            driver_path = os.getenv("CHROMEDRIVER_PATH")
+            browser_path = os.getenv("CHROME_BINARY_PATH")
+
+            # 设置浏览器路径（如果指定）
+            if browser_path and Path(browser_path).exists():
+                options.binary_location = browser_path
+                logger.debug(f"使用指定的浏览器: {browser_path}")
+
             # 创建Chrome驱动
-            self.driver = Chrome(options=options)
+            if driver_path and Path(driver_path).exists():
+                service = Service(executable_path=driver_path)
+                self.driver = Chrome(service=service, options=options)
+                logger.debug(f"使用指定的ChromeDriver: {driver_path}")
+            else:
+                self.driver = Chrome(options=options)
 
             logger.info("本地浏览器启动成功")
 
@@ -761,6 +813,16 @@ class LocalBrowser:
             finally:
                 self.driver = None
 
+        # 停止虚拟显示（如果启动了）
+        if self.display:
+            try:
+                self.display.stop()
+                logger.info("虚拟显示已停止")
+            except Exception as e:
+                logger.warning(f"停止虚拟显示失败: {e}")
+            finally:
+                self.display = None
+
     def __enter__(self):
         """上下文管理器入口"""
         self.connect()
@@ -984,18 +1046,21 @@ class UndetectedBrowser:
         # 准备 undetected-chromedriver 参数
         uc_options: dict[str, Any] = {
             "options": options,
+            "log_level": 0,  # 启用详细日志以便调试
+            "no_sandbox": True,  # 在容器/树莓派等环境中推荐
         }
         if self.headless:
             uc_options["headless"] = True
         if self.version_main:
             uc_options["version_main"] = self.version_main
-        if self.use_subprocess:
+        if self.use_subprocess is not None:  # 允许显式设置为 False
             uc_options["use_subprocess"] = self.use_subprocess
 
-        # 合并其他自定义参数
+        # 合并其他自定义参数（会覆盖上面的默认值）
         uc_options.update(self.kwargs)
 
         # 创建 undetected Chrome 驱动
+        logger.debug(f"undetected_chromedriver 参数: {uc_options}")
         self.driver = uc.Chrome(**uc_options)
 
         # 通过 CDP 进一步配置媒体阻止（如果启用）

@@ -76,34 +76,66 @@ install_system_deps() {
         xfonts-100dpi \
         xfonts-75dpi \
         xfonts-scalable \
-        xfonts-cyrillic
+        xfonts-base
 
     log_success "系统依赖安装完成"
 }
 
-# 检查并安装 Chrome
+# 检查并安装 Chrome/Chromium
 install_chrome() {
-    log_info "检查 Google Chrome..."
+    log_info "检查 Chrome/Chromium..."
+
+    # 检测系统架构
+    ARCH=$(dpkg --print-architecture)
 
     if command -v google-chrome &> /dev/null; then
         CHROME_VERSION=$(google-chrome --version | awk '{print $3}')
         log_success "Google Chrome 已安装: $CHROME_VERSION"
+    elif command -v chromium &> /dev/null || command -v chromium-browser &> /dev/null; then
+        CHROMIUM_CMD=$(command -v chromium || command -v chromium-browser)
+        CHROME_VERSION=$($CHROMIUM_CMD --version | awk '{print $2}')
+        log_success "Chromium 已安装: $CHROME_VERSION"
     else
-        log_info "安装 Google Chrome..."
+        if [ "$ARCH" = "amd64" ] || [ "$ARCH" = "x86_64" ]; then
+            log_info "安装 Google Chrome (AMD64)..."
 
-        # 下载并安装 Chrome
-        wget -q -O /tmp/google-chrome-stable_current_amd64.deb \
-            https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
+            # 下载并安装 Chrome
+            wget -q -O /tmp/google-chrome-stable_current_amd64.deb \
+                https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
 
-        sudo apt-get install -y /tmp/google-chrome-stable_current_amd64.deb || {
-            log_warning "安装 Chrome 时出现依赖问题，尝试修复..."
-            sudo apt-get install -f -y
-        }
+            sudo apt-get install -y /tmp/google-chrome-stable_current_amd64.deb || {
+                log_warning "安装 Chrome 时出现依赖问题，尝试修复..."
+                sudo apt-get install -f -y
+            }
 
-        rm /tmp/google-chrome-stable_current_amd64.deb
+            rm /tmp/google-chrome-stable_current_amd64.deb
 
-        CHROME_VERSION=$(google-chrome --version | awk '{print $3}')
-        log_success "Google Chrome 安装完成: $CHROME_VERSION"
+            CHROME_VERSION=$(google-chrome --version | awk '{print $3}')
+            log_success "Google Chrome 安装完成: $CHROME_VERSION"
+        else
+            log_info "检测到 $ARCH 架构，安装 Chromium..."
+
+            # 对于 ARM64 等架构，安装 Chromium
+            sudo apt-get install -y chromium chromium-driver || \
+            sudo apt-get install -y chromium-browser chromium-chromedriver
+
+            CHROMIUM_CMD=$(command -v chromium || command -v chromium-browser)
+            CHROME_VERSION=$($CHROMIUM_CMD --version | awk '{print $2}')
+            log_success "Chromium 安装完成: $CHROME_VERSION"
+
+            # ARM64：复制 chromedriver 到用户目录（undetected_chromedriver 需要可写权限）
+            log_info "配置 ChromeDriver（ARM64）..."
+            mkdir -p "$HOME/.local/bin"
+
+            # 查找 chromedriver 位置并复制
+            if [ -f /usr/bin/chromedriver ]; then
+                cp /usr/bin/chromedriver "$HOME/.local/bin/chromedriver"
+                chmod +x "$HOME/.local/bin/chromedriver"
+                log_success "ChromeDriver 已复制到: $HOME/.local/bin/chromedriver"
+            else
+                log_warning "未找到 chromedriver，请手动安装"
+            fi
+        fi
     fi
 }
 
@@ -181,9 +213,40 @@ setup_environment() {
     if [ ! -f .env ]; then
         log_info "创建 .env 文件..."
         cp env.example .env
-        log_success ".env 文件已创建，请根据需要修改配置"
+        log_success ".env 文件已创建"
     else
         log_warning ".env 文件已存在，跳过创建"
+    fi
+
+    # ARM64 架构特殊配置
+    ARCH=$(dpkg --print-architecture)
+    if [ "$ARCH" = "arm64" ] || [ "$ARCH" = "aarch64" ]; then
+        log_info "检测到 ARM64 架构，配置特殊参数..."
+
+        # 配置 ChromeDriver 路径
+        if [ -f "$HOME/.local/bin/chromedriver" ]; then
+            if ! grep -q "^CHROMEDRIVER_PATH=" .env; then
+                echo "" >> .env
+                echo "# ARM64 配置（自动添加）" >> .env
+                echo "CHROMEDRIVER_PATH=$HOME/.local/bin/chromedriver" >> .env
+                log_success "已添加 CHROMEDRIVER_PATH"
+            fi
+        fi
+
+        # 配置 Chromium 路径
+        CHROMIUM_PATH=$(command -v chromium || command -v chromium-browser)
+        if [ -n "$CHROMIUM_PATH" ]; then
+            if ! grep -q "^CHROME_BINARY_PATH=" .env; then
+                echo "CHROME_BINARY_PATH=$CHROMIUM_PATH" >> .env
+                log_success "已添加 CHROME_BINARY_PATH"
+            fi
+        fi
+
+        # 默认使用 local 浏览器模式（标准 Selenium）
+        if ! grep -q "^BROWSER_TYPE=" .env; then
+            echo "BROWSER_TYPE=local" >> .env
+            log_success "已设置 BROWSER_TYPE=local（ARM64 推荐）"
+        fi
     fi
 
     # 创建必要的目录
@@ -232,7 +295,13 @@ show_info() {
     echo -e "${BLUE}系统信息:${NC}"
     echo "  - Python: $(python3 --version | awk '{print $2}')"
     echo "  - uv: $(uv --version | awk '{print $2}')"
-    echo "  - Chrome: $(google-chrome --version | awk '{print $3}')"
+    if command -v google-chrome &> /dev/null; then
+        echo "  - Chrome: $(google-chrome --version | awk '{print $3}')"
+    elif command -v chromium &> /dev/null; then
+        echo "  - Chromium: $(chromium --version | awk '{print $2}')"
+    elif command -v chromium-browser &> /dev/null; then
+        echo "  - Chromium: $(chromium-browser --version | awk '{print $2}')"
+    fi
     echo "  - Xvfb: $(which Xvfb)"
     echo ""
     echo -e "${BLUE}下一步:${NC}"
@@ -253,6 +322,20 @@ show_info() {
     echo -e "     ${YELLOW}BROWSER_HEADLESS=false${NC}"
     echo -e "     ${YELLOW}BROWSER_USE_VIRTUAL_DISPLAY=true${NC}"
     echo ""
+
+    # ARM64 特别提示
+    ARCH=$(dpkg --print-architecture)
+    if [ "$ARCH" = "arm64" ] || [ "$ARCH" = "aarch64" ]; then
+        echo -e "${BLUE}ARM64/树莓派特别说明:${NC}"
+        echo "  - 已自动配置 ChromeDriver 路径"
+        echo "  - 使用 local 浏览器模式（标准 Selenium）"
+        echo "  - 支持虚拟显示（有头模式但不显示窗口）"
+        echo ""
+        echo -e "${BLUE}测试浏览器:${NC}"
+        echo -e "     ${YELLOW}uv run python test_selenium_basic.py${NC}"
+        echo ""
+    fi
+
     echo -e "${BLUE}文档:${NC}"
     echo "  - README.md"
     echo "  - docs/UNDETECTED_CHROME_USAGE.md"

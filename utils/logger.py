@@ -15,7 +15,7 @@ _logger_configured = False
 _logger_initialized = False
 _logger_level = "INFO"
 _logger_file = "logs/crawler.log"
-_logger_rotation = "10 MB"
+_logger_rotation = "100 MB"  # 增大轮转大小，避免频繁轮转
 _logger_retention = "30 days"
 
 
@@ -57,23 +57,26 @@ def get_logger(
     name: str = "crawler",  # noqa: ARG001
     log_file: str | None = None,
     level: str | None = None,
-    rotation: str | None = None,
-    retention: str | None = None,
 ):
     """
-    获取配置好的logger实例
+    获取配置好的logger实例（全局单例，多次调用返回同一个logger）
 
     Args:
-        name: 日志名称
+        name: 日志名称（仅用于兼容性，实际使用全局logger）
         log_file: 日志文件路径（如果为None，从配置文件读取）
         level: 日志级别（如果为None，从配置文件读取）
-        rotation: 日志轮转大小（如果为None，从配置文件读取）
-        retention: 日志保留时间（如果为None，从配置文件读取）
 
     Returns:
-        logger实例
+        logger实例（全局单例）
+
+    Note:
+        不再支持 rotation 和 retention 参数，每个进程使用独立的日志文件
     """
     global _logger_initialized
+
+    # 如果已经初始化过，直接返回全局logger
+    if _logger_initialized:
+        return logger
 
     # 加载配置（只加载一次）
     _load_log_config()
@@ -81,14 +84,18 @@ def get_logger(
     # 使用参数或配置值
     final_level = level or _logger_level
     final_log_file = log_file or _logger_file
-    final_rotation = rotation or _logger_rotation
-    final_retention = retention or _logger_retention
 
     # 只在第一次调用时初始化 handler
     if not _logger_initialized:
         # 确保日志目录存在
         log_path = Path(final_log_file)
         log_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # 为每个进程创建独立的日志文件（避免多进程冲突）
+        # 格式: logs/crawler.PID.log
+        log_stem = log_path.stem
+        log_suffix = log_path.suffix
+        process_log_file = log_path.parent / f"{log_stem}.{os.getpid()}{log_suffix}"
 
         # 移除默认handler
         logger.remove()
@@ -101,17 +108,20 @@ def get_logger(
             colorize=True,
         )
 
-        # 添加文件输出
+        # 添加文件输出（每个进程独立文件，不轮转）
+        # 注意：每个进程有独立的日志文件，不需要 rotation/retention/compression
         logger.add(
-            final_log_file,
+            str(process_log_file),
             format="{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {name}:{function}:{line} - {message}",
             level=final_level,
-            rotation=final_rotation,
-            retention=final_retention,
-            compression="zip",
+            rotation=None,  # 禁用轮转，每个进程一个文件
+            retention=None,  # 禁用自动清理
+            compression=None,  # 不压缩
             encoding="utf-8",
+            enqueue=True,  # 异步写入，提高性能并避免阻塞
         )
 
         _logger_initialized = True
+        logger.info(f"日志系统初始化完成: {process_log_file}")
 
     return logger
