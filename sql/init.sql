@@ -31,6 +31,8 @@ CREATE TABLE IF NOT EXISTS listing_info (
     mrt_station VARCHAR(255) DEFAULT NULL COMMENT '最近地铁站，例如 "PE6 Oasis LRT Station"',
     mrt_distance_m INT DEFAULT NULL COMMENT '距离最近地铁站的距离（米）',
     location VARCHAR(255) DEFAULT NULL COMMENT '地址',
+    latitude DECIMAL(10,7) DEFAULT NULL COMMENT '纬度（7位小数精度约1.1cm）',
+    longitude DECIMAL(10,7) DEFAULT NULL COMMENT '经度（7位小数精度约1.1cm）',
 
     -- 列表信息
     listed_date DATE DEFAULT NULL COMMENT '房源上架日期',
@@ -73,21 +75,13 @@ CREATE TABLE IF NOT EXISTS listing_media (
 
 
 -- =========================================================
--- 6️⃣ 房源设施表（Amenities和Facilities）
--- =========================================================
-CREATE TABLE IF NOT EXISTS listing_amenities (
-    id BIGINT AUTO_INCREMENT PRIMARY KEY COMMENT '自增主键ID',
-    listing_id BIGINT NOT NULL COMMENT '对应 listing_info 的 listing_id',
-    amenity_type ENUM('amenity', 'facility') NOT NULL COMMENT '类型: amenity(便利设施) / facility(公共设施)',
-    name VARCHAR(255) NOT NULL COMMENT '设施名称',
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '记录创建时间',
-    FOREIGN KEY (listing_id) REFERENCES listing_info(listing_id) ON DELETE CASCADE,
-    UNIQUE KEY uk_listing_amenity (listing_id, amenity_type, name)
-) ENGINE=InnoDB COMMENT='房源设施表';
-
--- =========================================================
 -- 7️⃣ 索引
 -- =========================================================
 CREATE INDEX idx_listing_id ON listing_info (listing_id);
 CREATE INDEX idx_listing_completed ON listing_info (is_completed);
 CREATE INDEX idx_media_listing ON listing_media (listing_id);
+
+-- 地理坐标索引（支持空间查询）
+CREATE INDEX idx_listing_info_latitude ON listing_info(latitude);
+CREATE INDEX idx_listing_info_longitude ON listing_info(longitude);
+CREATE INDEX idx_listing_info_lat_lng ON listing_info(latitude, longitude);

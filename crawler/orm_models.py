@@ -61,6 +61,12 @@ class ListingInfoORM(Base):
         Integer, nullable=True, comment="距离最近地铁站的距离（米）"
     )
     location: Mapped[str | None] = mapped_column(String(255), nullable=True, comment="地址")
+    latitude: Mapped[Decimal | None] = mapped_column(
+        DECIMAL(10, 7), nullable=True, comment="纬度（7位小数精度约1.1cm）"
+    )
+    longitude: Mapped[Decimal | None] = mapped_column(
+        DECIMAL(10, 7), nullable=True, comment="经度（7位小数精度约1.1cm）"
+    )
     listed_date: Mapped[date | None] = mapped_column(Date, nullable=True, comment="房源上架日期")
     listed_age: Mapped[str | None] = mapped_column(String(50), nullable=True, comment="上架时长")
     green_score_value: Mapped[Decimal | None] = mapped_column(

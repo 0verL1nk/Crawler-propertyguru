@@ -6,7 +6,9 @@
 from __future__ import annotations
 
 import html
+import os
 import re
+from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urljoin
@@ -18,11 +20,30 @@ from selenium.webdriver.support import expected_conditions as EC
 if TYPE_CHECKING:
     from selenium.webdriver.remote.webelement import WebElement
 
+from utils.geocoding import geocode_address
 from utils.logger import get_logger
 
 from .models import ListingInfo, PropertyDetails
 
 logger = get_logger("Parsers")
+
+# 从环境变量读取是否启用地理编码（默认关闭，因为会显著降低爬取速度）
+ENABLE_GEOCODING = os.getenv("ENABLE_GEOCODING", "false").lower() == "true"
+
+
+def _should_geocode(enable_geocoding_override: bool | None = None) -> bool:
+    """
+    判断是否应该进行地理编码
+
+    Args:
+        enable_geocoding_override: 覆盖全局设置，None 表示使用全局设置
+
+    Returns:
+        是否应该进行地理编码
+    """
+    if enable_geocoding_override is not None:
+        return enable_geocoding_override
+    return ENABLE_GEOCODING
 
 
 def _clean_text(text: str | None) -> str | None:
@@ -44,6 +65,71 @@ def _clean_text(text: str | None) -> str | None:
     return cleaned.strip() if cleaned else None
 
 
+def _parse_listed_date(
+    listed_age: str | None, crawl_time: datetime | None = None
+) -> datetime | None:
+    """
+    从 listed_age 字段解析出准确的上架时间
+
+    Args:
+        listed_age: 上架信息字符串，如 "Listed on Nov 04, 2025 (5m ago)"
+        crawl_time: 爬取时间，默认为当前时间
+
+    Returns:
+        计算出的上架时间，如果解析失败则返回 None
+
+    单位说明：
+        s - 秒 (seconds)
+        m - 分钟 (minutes)
+        h - 小时 (hours)
+        d - 天 (days)
+        mo - 月 (months)
+    """
+    if not listed_age:
+        return None
+
+    if crawl_time is None:
+        crawl_time = datetime.now()
+
+    # 提取相对时间部分，如 "(5m ago)"
+    # 支持格式：(5m ago), (2h ago), (3d ago), (1mo ago), (30s ago)
+    pattern = r"\((\d+)(s|m|h|d|mo)\s+ago\)"
+    match = re.search(pattern, listed_age)
+
+    if not match:
+        logger.debug(f"无法从 listed_age 中提取相对时间: {listed_age}")
+        return None
+
+    value = int(match.group(1))
+    unit = match.group(2)
+
+    # 根据单位计算时间差
+    try:
+        if unit == "s":
+            delta = timedelta(seconds=value)
+        elif unit == "m":
+            delta = timedelta(minutes=value)
+        elif unit == "h":
+            delta = timedelta(hours=value)
+        elif unit == "d":
+            delta = timedelta(days=value)
+        elif unit == "mo":
+            # 月份按30天计算（近似值）
+            delta = timedelta(days=value * 30)
+        else:
+            logger.warning(f"未知的时间单位: {unit}")
+            return None
+
+        # 计算上架时间
+        listed_datetime = crawl_time - delta
+        logger.debug(f"解析 listed_age: {listed_age} -> {value}{unit} -> {listed_datetime}")
+        return listed_datetime
+
+    except (ValueError, OverflowError) as e:
+        logger.error(f"解析 listed_age 时出错: {listed_age}, 错误: {e}")
+        return None
+
+
 class TextNotEmpty:
     """自定义等待条件：等待元素有非空文本"""
 
@@ -61,14 +147,16 @@ class TextNotEmpty:
 class ListingPageParser:
     """列表页解析器"""
 
-    def __init__(self, browser):
+    def __init__(self, browser, enable_geocoding: bool | None = None):
         """
         初始化解析器
 
         Args:
             browser: RemoteBrowser实例
+            enable_geocoding: 是否启用地理编码，None 表示使用环境变量配置
         """
         self.browser = browser
+        self.enable_geocoding = enable_geocoding
         self.wait = browser.wait(timeout=10) if browser.driver else None
 
     def get_max_pages(self) -> int | None:
@@ -655,6 +743,21 @@ class ListingPageParser:
                 listed_age = None
             logger.debug(f"listed_age: {listed_age}")
 
+            logger.debug("开始计算 listed_date...")
+            listed_datetime = _parse_listed_date(listed_age)
+            listed_date = listed_datetime.date() if listed_datetime else None
+            logger.debug(f"listed_date: {listed_date}")
+
+            logger.debug("开始地理编码...")
+            should_geocode = _should_geocode(self.enable_geocoding)
+            if should_geocode and location:
+                latitude, longitude = geocode_address(location)
+                logger.debug(f"latitude: {latitude}, longitude: {longitude}")
+            else:
+                latitude, longitude = None, None
+                if not should_geocode:
+                    logger.debug("地理编码已禁用")
+
             logger.debug("开始创建 ListingInfo 对象...")
 
             return ListingInfo(
@@ -671,6 +774,9 @@ class ListingPageParser:
                 mrt_station=mrt_station,
                 mrt_distance_m=mrt_distance_m,
                 location=location,
+                latitude=latitude,
+                longitude=longitude,
+                listed_date=listed_date,
                 listed_age=listed_age,
                 url=detail_url,
             )
@@ -761,6 +867,21 @@ class ListingPageParser:
             listed_age = self._extract_text_field(card, '[da-id="listing-card-v2-recency"] span')
             logger.debug(f"listed_age: {listed_age}")
 
+            logger.debug("开始计算 listed_date...")
+            listed_datetime = _parse_listed_date(listed_age)
+            listed_date = listed_datetime.date() if listed_datetime else None
+            logger.debug(f"listed_date: {listed_date}")
+
+            logger.debug("开始地理编码...")
+            should_geocode = _should_geocode(self.enable_geocoding)
+            if should_geocode and location:
+                latitude, longitude = geocode_address(location)
+                logger.debug(f"latitude: {latitude}, longitude: {longitude}")
+            else:
+                latitude, longitude = None, None
+                if not should_geocode:
+                    logger.debug("地理编码已禁用")
+
             logger.debug("开始创建 ListingInfo 对象...")
 
             return ListingInfo(
@@ -777,6 +898,9 @@ class ListingPageParser:
                 mrt_station=mrt_station,
                 mrt_distance_m=mrt_distance_m,
                 location=location,
+                latitude=latitude,
+                longitude=longitude,
+                listed_date=listed_date,
                 listed_age=listed_age,
                 url=detail_url,
             )

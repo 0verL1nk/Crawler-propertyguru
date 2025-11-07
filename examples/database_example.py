@@ -1,117 +1,306 @@
 """
-数据库存储示例
-演示如何将爬取的数据保存到数据库
+数据库使用示例
+演示如何使用新的数据库抽象层（支持 MySQL, PostgreSQL, Supabase）
 """
 
+from __future__ import annotations
+
 import sys
-from datetime import datetime
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
+# 添加项目根目录到路径
+project_root = Path(__file__).parent.parent
+sys.path.insert(0, str(project_root))
 
-from crawler import Config, Spider
-from utils.logger import get_logger
+# noqa: E402 - 必须在修改 sys.path 之后导入
+from sqlalchemy import func  # noqa: E402
+
+from crawler.database_factory import get_database  # noqa: E402
+from crawler.orm_models import ListingInfoORM  # noqa: E402
+from utils.logger import get_logger  # noqa: E402
 
 logger = get_logger("DatabaseExample")
 
 
-def parse_and_save(response, spider):
-    """解析并保存数据"""
+def example_1_basic_usage():
+    """示例1: 基本用法 - 自动从环境变量读取配置"""
+    logger.info("=" * 60)
+    logger.info("示例1: 基本用法")
+    logger.info("=" * 60)
+
+    # 创建数据库实例（自动从 .env 读取配置）
+    db = get_database()
+
+    # 测试连接
+    if db.test_connection():
+        logger.info(f"✅ 数据库连接成功，类型: {db.db_type}")
+    else:
+        logger.error("❌ 数据库连接失败")
+        return
+
+    # 查询数据
+    with db.get_session() as session:
+        # 查询前 5 条记录
+        listings = session.query(ListingInfoORM).limit(5).all()
+
+        logger.info(f"查询到 {len(listings)} 条记录：")
+        for listing in listings:
+            logger.info(f"  - {listing.listing_id}: {listing.title} (S${listing.price:,.0f})")
+
+    # 关闭连接
+    db.close()
+
+
+def example_2_explicit_config():
+    """示例2: 明确指定数据库类型和配置"""
+    logger.info("=" * 60)
+    logger.info("示例2: 明确指定配置")
+    logger.info("=" * 60)
+
+    # 方式1: 只指定类型，其他从环境变量读取
+    db = get_database(db_type="postgresql")
+
+    # 方式2: 完全自定义配置（示例）
+    # custom_config = {
+    #     "host": "localhost",
+    #     "port": 5432,
+    #     "username": "postgres",
+    #     "password": "password",
+    #     "database": "property_search",
+    # }
+    # db = get_database(db_type='postgresql', config=custom_config)
+
+    logger.info(f"数据库类型: {db.db_type}")
+
+    db.close()
+
+
+def example_3_query_operations():
+    """示例3: 查询操作"""
+    logger.info("=" * 60)
+    logger.info("示例3: 查询操作")
+    logger.info("=" * 60)
+
+    db = get_database()
+
+    with db.get_session() as session:
+        # 简单查询
+        listing = session.query(ListingInfoORM).first()
+        if listing:
+            logger.info(f"第一条记录: {listing.title}")
+
+        # 条件查询
+        expensive_listings = (
+            session.query(ListingInfoORM)
+            .filter(ListingInfoORM.price > 1000000)
+            .filter(ListingInfoORM.bedrooms >= 3)
+            .limit(5)
+            .all()
+        )
+
+        logger.info(f"找到 {len(expensive_listings)} 个高价房源（>S$1M, >=3房）")
+
+        # 排序查询
+        latest_listings = (
+            session.query(ListingInfoORM).order_by(ListingInfoORM.created_at.desc()).limit(3).all()
+        )
+
+        logger.info("最新的 3 个房源：")
+        for listing in latest_listings:
+            logger.info(f"  - {listing.listing_id}: {listing.title}")
+
+        # 聚合查询
+        from sqlalchemy import func
+
+        avg_price = session.query(func.avg(ListingInfoORM.price)).scalar()
+        count = session.query(func.count(ListingInfoORM.id)).scalar()
+
+        logger.info("统计信息:")
+        logger.info(f"  - 总数: {count}")
+        logger.info(f"  - 平均价格: S${avg_price:,.0f}" if avg_price else "  - 平均价格: N/A")
+
+    db.close()
+
+
+def example_4_insert_operations():
+    """示例4: 插入操作"""
+    logger.info("=" * 60)
+    logger.info("示例4: 插入操作")
+    logger.info("=" * 60)
+
+    db = get_database()
+
+    # 单条插入
+    with db.get_session() as session:
+        test_listing = ListingInfoORM(
+            listing_id=999999,
+            title="Test Listing - Example",
+            price=950000,
+            bedrooms=3,
+            bathrooms=2,
+            location="Test Location",
+            is_completed=False,
+        )
+
+        session.add(test_listing)
+        # 自动提交
+        logger.info(f"✅ 插入测试数据: {test_listing.listing_id}")
+
+    # 批量插入
+    with db.get_session() as session:
+        test_listings = [
+            ListingInfoORM(
+                listing_id=999990 + i,
+                title=f"Test Listing {i}",
+                price=900000 + i * 10000,
+                bedrooms=2 + i % 3,
+            )
+            for i in range(3)
+        ]
+
+        session.add_all(test_listings)
+        logger.info(f"✅ 批量插入 {len(test_listings)} 条测试数据")
+
+    db.close()
+
+
+def example_5_update_operations():
+    """示例5: 更新操作"""
+    logger.info("=" * 60)
+    logger.info("示例5: 更新操作")
+    logger.info("=" * 60)
+
+    db = get_database()
+
+    with db.get_session() as session:
+        # 查找并更新
+        listing = session.query(ListingInfoORM).filter_by(listing_id=999999).first()
+
+        if listing:
+            old_title = listing.title
+            listing.title = "Updated Test Listing"
+            listing.price = 1000000
+            # 自动提交
+
+            logger.info(f"✅ 更新记录: {old_title} → {listing.title}")
+        else:
+            logger.warning("未找到测试记录")
+
+    db.close()
+
+
+def example_6_delete_operations():
+    """示例6: 删除操作"""
+    logger.info("=" * 60)
+    logger.info("示例6: 删除操作（清理测试数据）")
+    logger.info("=" * 60)
+
+    db = get_database()
+
+    with db.get_session() as session:
+        # 删除测试数据
+        deleted_count = (
+            session.query(ListingInfoORM)
+            .filter(ListingInfoORM.listing_id >= 999990)
+            .delete(synchronize_session=False)
+        )
+
+        logger.info(f"✅ 删除 {deleted_count} 条测试数据")
+
+    db.close()
+
+
+def example_7_supabase():
+    """示例7: 使用 Supabase"""
+    logger.info("=" * 60)
+    logger.info("示例7: Supabase 连接")
+    logger.info("=" * 60)
+
     try:
-        # 提取数据
-        data = {
-            "url": response.url,
-            "status_code": response.status_code,
-            "title": "",
-            "crawled_at": datetime.now().isoformat(),
-            "content_length": len(response.content),
-        }
+        # 需要先在 .env 中配置 Supabase 相关参数
+        db = get_database(db_type="supabase")
 
-        # 提取标题
-        soup = response.soup
-        title = soup.find("title")
-        if title:
-            data["title"] = title.text
+        if db.test_connection():
+            logger.info("✅ Supabase 连接成功")
 
-        logger.info(f"提取数据: {data['url']} - {data['title']}")
+            with db.get_session() as session:
+                count = session.query(func.count(ListingInfoORM.id)).scalar()
+                logger.info(f"Supabase 中的记录数: {count}")
 
-        # 保存到数据库
-        spider.save_to_db(data, collection="crawled_pages")
+        db.close()
 
-        return data
     except Exception as e:
-        logger.error(f"解析失败: {e}")
+        logger.warning(f"Supabase 连接失败（可能未配置）: {e}")
+
+
+def example_8_dual_database():
+    """示例8: 双数据库配置（MySQL + PostgreSQL）"""
+    logger.info("=" * 60)
+    logger.info("示例8: 双数据库配置")
+    logger.info("=" * 60)
+
+    try:
+        # MySQL 实例
+        mysql_db = get_database(db_type="mysql")
+
+        # PostgreSQL 实例
+        pg_db = get_database(db_type="postgresql")
+
+        # 从 MySQL 读取
+        with mysql_db.get_session() as mysql_session:
+            listing = mysql_session.query(ListingInfoORM).first()
+
+            if listing:
+                logger.info(f"从 MySQL 读取: {listing.title}")
+
+                # 同步到 PostgreSQL
+                with pg_db.get_session() as pg_session:
+                    # 创建新对象避免 session 冲突
+                    new_listing = ListingInfoORM()
+                    for key, value in listing.__dict__.items():
+                        if not key.startswith("_"):
+                            setattr(new_listing, key, value)
+
+                    pg_session.merge(new_listing)  # merge 而不是 add，避免主键冲突
+                    logger.info(f"同步到 PostgreSQL: {listing.listing_id}")
+
+        mysql_db.close()
+        pg_db.close()
+
+    except Exception as e:
+        logger.error(f"双数据库操作失败: {e}")
 
 
 def main():
-    """主函数"""
-    # 使用YAML配置文件
+    """运行所有示例"""
     try:
-        config = Config.from_yaml("config.yaml")
-        logger.info("从config.yaml加载配置")
-    except FileNotFoundError:
-        # 如果没有配置文件，使用默认配置
-        logger.warning("config.yaml不存在，使用默认配置")
-        config = {
-            "database": {
-                "type": "mongodb",
-                "mongodb": {
-                    "host": "localhost",
-                    "port": 27017,
-                    "database": "crawler_db",
-                },
-            },
-            "crawler": {
-                "concurrency": 3,
-                "timeout": 30,
-                "use_proxy": False,
-            },
-        }
-        config = Config(config)
+        # 基础示例
+        example_1_basic_usage()
 
-    # 创建爬虫实例
-    spider = Spider(config)
+        # 配置示例
+        example_2_explicit_config()
 
-    # 要爬取的URL
-    urls = [
-        "https://httpbin.org/html",
-        "https://httpbin.org/json",
-    ]
+        # 查询操作
+        example_3_query_operations()
 
-    try:
-        logger.info("开始爬取并保存到数据库...")
+        # 插入操作
+        example_4_insert_operations()
 
-        # 方式1: 使用lambda传递spider参数
-        spider.crawl(urls, callback=lambda resp: parse_and_save(resp, spider))
+        # 更新操作
+        example_5_update_operations()
 
-        # 方式2: 直接保存字典数据
-        test_data = {
-            "type": "test",
-            "message": "这是一条测试数据",
-            "timestamp": datetime.now().isoformat(),
-        }
-        spider.save_to_db(test_data, collection="test_collection")
+        # 删除操作（清理测试数据）
+        example_6_delete_operations()
 
-        logger.info("数据保存完成")
+        # Supabase（如果配置了）
+        # example_7_supabase()
 
-        # 如果使用MongoDB，可以查询数据
-        if spider.db_manager:
-            db = spider.db_manager.get_db()
-            if hasattr(db, "find_many"):
-                # MongoDB
-                records = db.find_many("crawled_pages", limit=5)
-                logger.info(f"查询到 {len(records)} 条记录")
-                for record in records:
-                    logger.info(f"  - {record.get('url')} | {record.get('title')}")
+        # 双数据库（如果都配置了）
+        # example_8_dual_database()
 
     except Exception as e:
-        logger.error(f"操作失败: {e}")
-    finally:
-        spider.close()
+        logger.error(f"示例运行失败: {e}", exc_info=True)
 
 
 if __name__ == "__main__":
-    logger.warning("提示: 请确保MongoDB服务正在运行")
-    logger.warning("或者修改配置使用其他数据库")
-
     main()

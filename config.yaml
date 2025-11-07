@@ -37,8 +37,9 @@ database:
   # 数据库类型: mysql, mongodb, sqlite
   type: "mysql"
 
-  # MongoDB配置
+  # MongoDB配置（可选，默认不启用）
   mongodb:
+    enabled: false  # 设置为 true 以启用 MongoDB
     host: "localhost"
     port: 27017
     database: "crawler_db"

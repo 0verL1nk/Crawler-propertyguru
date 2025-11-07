@@ -30,6 +30,8 @@ class ListingInfo:
     mrt_station: str | None = None
     mrt_distance_m: int | None = None
     location: str | None = None
+    latitude: Decimal | None = None  # 纬度
+    longitude: Decimal | None = None  # 经度
     listed_date: date | None = None
     listed_age: str | None = None
     green_score_value: Decimal | None = None

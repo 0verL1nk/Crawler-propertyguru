@@ -19,11 +19,13 @@ from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_ex
 from utils.logger import get_logger
 
 from .browser import LocalBrowser, RemoteBrowser, UndetectedBrowser
-from .database import DatabaseManager
+from .database import DatabaseManager  # 保留用于MongoDB
+from .database_factory import get_database
 from .db_operations import DBOperations
 
 if TYPE_CHECKING:
     from .config import Config
+    from .database_interface import SQLDatabaseInterface
     from .models import ListingInfo, MediaItem
 from .media_processor import MediaProcessor
 from .parsers import DetailPageParser, ListingPageParser
@@ -50,7 +52,8 @@ class PropertyGuruCrawler:
 
         # 初始化组件
         self.browser: RemoteBrowser | LocalBrowser | UndetectedBrowser | None = None
-        self.db_manager: DatabaseManager | None = None
+        self.sql_db: SQLDatabaseInterface | None = None  # SQL数据库（MySQL/PostgreSQL）
+        self.mongo_db: DatabaseManager | None = None  # MongoDB（旧的DatabaseManager）
         self.db_ops: DBOperations | None = None
         self.storage_manager: StorageManagerProtocol | None = None
         self.media_processor: MediaProcessor | None = None
@@ -150,8 +153,28 @@ class PropertyGuruCrawler:
         """初始化数据库"""
         db_config = self.config.get_section("database")
         if db_config:
-            self.db_manager = DatabaseManager(db_config)
-            self.db_ops = DBOperations(self.db_manager)
+            # 使用新的工厂模式初始化 SQL 数据库（MySQL/PostgreSQL）
+            try:
+                self.sql_db = get_database()  # 从环境变量读取 DB_TYPE 配置
+                logger.info(f"SQL 数据库已初始化: {self.sql_db.db_type}")
+
+                # 创建数据库操作对象，兼容新旧接口
+                self.db_ops = DBOperations(self.sql_db)
+            except Exception as e:
+                logger.error(f"SQL 数据库初始化失败: {e}")
+                raise
+
+            # 如果明确配置需要 MongoDB，则初始化（可选）
+            # 注意：现在主要使用 SQL 数据库（MySQL/PostgreSQL），MongoDB 仅在特殊场景下使用
+            mongodb_config = db_config.get("mongodb", {})
+            if mongodb_config and mongodb_config.get("enabled", False):
+                try:
+                    self.mongo_db = DatabaseManager(db_config)
+                    logger.info("MongoDB 已初始化")
+                except Exception as e:
+                    logger.warning(f"MongoDB 初始化失败（可选）: {e}")
+            else:
+                logger.debug("MongoDB 未启用，跳过初始化")
 
     def _init_storage(self):
         """初始化存储管理器"""
@@ -267,12 +290,15 @@ class PropertyGuruCrawler:
             logger.error(f"获取最大页数失败: {e}")
             return None
 
-    def crawl_listing_page(self, page_num: int) -> list[ListingInfo]:
+    def crawl_listing_page(
+        self, page_num: int, enable_geocoding: bool | None = None
+    ) -> list[ListingInfo]:
         """
         爬取列表页
 
         Args:
             page_num: 页码
+            enable_geocoding: 是否启用地理编码，None 表示使用环境变量配置
 
         Returns:
             房源信息列表
@@ -292,7 +318,7 @@ class PropertyGuruCrawler:
             wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "div.search-result-root")))
 
             # 解析页面（优化：先缓存所有卡片HTML，再批量解析）
-            parser = ListingPageParser(self.browser)
+            parser = ListingPageParser(self.browser, enable_geocoding=enable_geocoding)
             cards_html = parser.extract_listing_cards_html()
 
             listings = []
@@ -950,7 +976,8 @@ class PropertyGuruCrawler:
                     logger.debug(f"开始爬取第 {page_num}/{end_page} 页")
                     logger.debug(f"{'=' * 60}")
 
-                    listings = self.crawl_listing_page(page_num)
+                    # 更新模式启用地理编码（因为数量少，不会显著影响速度）
+                    listings = self.crawl_listing_page(page_num, enable_geocoding=True)
                     if not listings:
                         logger.warning(f"第 {page_num} 页没有找到房源")
                         continue
@@ -1027,9 +1054,6 @@ class PropertyGuruCrawler:
                             logger.debug(f"等待 {delay} 秒后继续...")
                             await asyncio.sleep(delay)
 
-                    success_count += page_success
-                    fail_count += page_fail
-
                     if self.db_ops:
                         self.db_ops.flush_all()
                     self.progress.mark_page_completed(page_num)
@@ -1102,5 +1126,7 @@ class PropertyGuruCrawler:
             self.browser.close()
         if self.db_ops:
             self.db_ops.flush_all()
-        if self.db_manager:
-            self.db_manager.close()
+        if self.sql_db:
+            self.sql_db.close()
+        if self.mongo_db:
+            self.mongo_db.close()

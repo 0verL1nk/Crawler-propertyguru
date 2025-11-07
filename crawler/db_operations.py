@@ -8,12 +8,12 @@ from __future__ import annotations
 from collections import deque
 from typing import TYPE_CHECKING
 
-from sqlalchemy import func, select
-from sqlalchemy.dialects.mysql import insert
+from sqlalchemy import func, insert, select
 
 from utils.logger import get_logger
 
 from .database import DatabaseManager, MySQLManager
+from .database_interface import SQLDatabaseInterface
 from .orm_models import ListingInfoORM, MediaItemORM
 
 if TYPE_CHECKING:
@@ -25,23 +25,51 @@ logger = get_logger("DBOperations")
 class DBOperations:
     """数据库操作封装类"""
 
-    def __init__(self, db_manager: DatabaseManager):
+    def __init__(self, db_manager: DatabaseManager | SQLDatabaseInterface):
         """
         初始化数据库操作
 
         Args:
-            db_manager: DatabaseManager实例
+            db_manager: DatabaseManager实例或SQLDatabaseInterface实例
         """
-        self.db_manager = db_manager
-        self.db = db_manager.get_db()
+        # 兼容新旧接口
+        if isinstance(db_manager, SQLDatabaseInterface):
+            # 新接口：直接使用 SQLDatabaseInterface
+            self.sql_db: SQLDatabaseInterface | None = db_manager
+            self.db_manager: DatabaseManager | None = None
+            self.db: MySQLManager | None = None
+            logger.debug(f"使用新的 SQL 数据库接口: {db_manager.db_type}")
+        else:
+            # 旧接口：使用 DatabaseManager
+            self.db_manager = db_manager
+            self.sql_db = None
+            self.db = db_manager.get_db()  # type: ignore[assignment]
+
+            # 检查是否是MySQL
+            if not isinstance(self.db, MySQLManager):
+                raise ValueError("旧接口当前只支持MySQL数据库")
+            logger.debug("使用旧的 DatabaseManager 接口")
 
         # 数据缓冲队列（用于批量插入）
         self.listing_buffer: deque = deque(maxlen=100)
         self.media_buffer: deque = deque(maxlen=100)
 
-        # 检查是否是MySQL
-        if not isinstance(self.db, MySQLManager):
-            raise ValueError("当前只支持MySQL数据库")
+    def _get_session(self):
+        """获取数据库 session 上下文管理器（兼容新旧接口）"""
+        if self.sql_db:
+            return self.sql_db.get_session()
+        else:
+            assert self.db is not None
+            return self.db.get_session()
+
+    def _get_db_type(self) -> str:
+        """获取数据库类型"""
+        if self.sql_db:
+            return self.sql_db.db_type
+        elif isinstance(self.db, MySQLManager):
+            return "mysql"
+        else:
+            return "unknown"
 
     def save_listing_info(self, listing: ListingInfo, flush: bool = False) -> bool:
         """
@@ -83,8 +111,7 @@ class DBOperations:
             return True
 
         try:
-            assert isinstance(self.db, MySQLManager)
-            with self.db.get_session() as session:
+            with self._get_session() as session:
                 # 准备数据
                 data_list = []
                 for listing in listings:
@@ -94,30 +121,72 @@ class DBOperations:
                         data["is_completed"] = False
                     data_list.append(data)
 
-                # 使用 MySQL 的 INSERT ... ON DUPLICATE KEY UPDATE
-                stmt = insert(ListingInfoORM).values(data_list)
-                stmt = stmt.on_duplicate_key_update(
-                    title=stmt.inserted.title,
-                    price=stmt.inserted.price,
-                    price_per_sqft=stmt.inserted.price_per_sqft,
-                    bedrooms=stmt.inserted.bedrooms,
-                    bathrooms=stmt.inserted.bathrooms,
-                    area_sqft=stmt.inserted.area_sqft,
-                    unit_type=stmt.inserted.unit_type,
-                    tenure=stmt.inserted.tenure,
-                    build_year=stmt.inserted.build_year,
-                    mrt_station=stmt.inserted.mrt_station,
-                    mrt_distance_m=stmt.inserted.mrt_distance_m,
-                    location=stmt.inserted.location,
-                    listed_date=stmt.inserted.listed_date,
-                    listed_age=stmt.inserted.listed_age,
-                    green_score_value=stmt.inserted.green_score_value,
-                    green_score_max=stmt.inserted.green_score_max,
-                    url=stmt.inserted.url,
-                    # 注意：is_completed字段不在ON DUPLICATE KEY UPDATE中更新
-                    # 只有通过mark_listing_completed方法才设置为true
-                )
-                session.execute(stmt)
+                db_type = self._get_db_type()
+
+                if db_type == "mysql":
+                    # 使用 MySQL 的 INSERT ... ON DUPLICATE KEY UPDATE
+                    from sqlalchemy.dialects.mysql import insert as mysql_insert
+
+                    stmt = mysql_insert(ListingInfoORM).values(data_list)
+                    stmt = stmt.on_duplicate_key_update(
+                        title=stmt.inserted.title,
+                        price=stmt.inserted.price,
+                        price_per_sqft=stmt.inserted.price_per_sqft,
+                        bedrooms=stmt.inserted.bedrooms,
+                        bathrooms=stmt.inserted.bathrooms,
+                        area_sqft=stmt.inserted.area_sqft,
+                        unit_type=stmt.inserted.unit_type,
+                        tenure=stmt.inserted.tenure,
+                        build_year=stmt.inserted.build_year,
+                        mrt_station=stmt.inserted.mrt_station,
+                        mrt_distance_m=stmt.inserted.mrt_distance_m,
+                        location=stmt.inserted.location,
+                        latitude=stmt.inserted.latitude,
+                        longitude=stmt.inserted.longitude,
+                        listed_date=stmt.inserted.listed_date,
+                        listed_age=stmt.inserted.listed_age,
+                        green_score_value=stmt.inserted.green_score_value,
+                        green_score_max=stmt.inserted.green_score_max,
+                        url=stmt.inserted.url,
+                        # 注意：is_completed字段不在ON DUPLICATE KEY UPDATE中更新
+                        # 只有通过mark_listing_completed方法才设置为true
+                    )
+                    session.execute(stmt)
+
+                elif db_type == "postgresql":
+                    # 使用 PostgreSQL 的 INSERT ... ON CONFLICT DO UPDATE
+                    from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+                    pg_stmt = pg_insert(ListingInfoORM).values(data_list)
+                    pg_stmt = pg_stmt.on_conflict_do_update(
+                        index_elements=["listing_id"],
+                        set_={
+                            "title": pg_stmt.excluded.title,
+                            "price": pg_stmt.excluded.price,
+                            "price_per_sqft": pg_stmt.excluded.price_per_sqft,
+                            "bedrooms": pg_stmt.excluded.bedrooms,
+                            "bathrooms": pg_stmt.excluded.bathrooms,
+                            "area_sqft": pg_stmt.excluded.area_sqft,
+                            "unit_type": pg_stmt.excluded.unit_type,
+                            "tenure": pg_stmt.excluded.tenure,
+                            "build_year": pg_stmt.excluded.build_year,
+                            "mrt_station": pg_stmt.excluded.mrt_station,
+                            "mrt_distance_m": pg_stmt.excluded.mrt_distance_m,
+                            "location": pg_stmt.excluded.location,
+                            "latitude": pg_stmt.excluded.latitude,
+                            "longitude": pg_stmt.excluded.longitude,
+                            "listed_date": pg_stmt.excluded.listed_date,
+                            "listed_age": pg_stmt.excluded.listed_age,
+                            "green_score_value": pg_stmt.excluded.green_score_value,
+                            "green_score_max": pg_stmt.excluded.green_score_max,
+                            "url": pg_stmt.excluded.url,
+                            # 注意：is_completed字段不更新
+                        },
+                    )
+                    session.execute(pg_stmt)
+                else:
+                    raise ValueError(f"不支持的数据库类型: {db_type}")
+
                 # commit 由上下文管理器自动处理
 
             logger.info(f"批量保存 {len(listings)} 条房源信息")
@@ -138,7 +207,6 @@ class DBOperations:
             是否成功
         """
         try:
-            assert isinstance(self.db, MySQLManager)
             logger.debug(
                 f"开始保存PropertyDetails - listing_id: {details.listing_id}, "
                 f"property_details: {bool(details.property_details)}, "
@@ -147,7 +215,7 @@ class DBOperations:
                 f"amenities: {bool(details.amenities)}, "
                 f"facilities: {bool(details.facilities)}"
             )
-            with self.db.get_session() as session:
+            with self._get_session() as session:
                 stmt = select(ListingInfoORM).where(ListingInfoORM.listing_id == details.listing_id)
                 listing = session.scalar(stmt)
                 if listing:
@@ -218,8 +286,7 @@ class DBOperations:
             return True
 
         try:
-            assert isinstance(self.db, MySQLManager)
-            with self.db.get_session() as session:
+            with self._get_session() as session:
                 data_list = [media.to_dict() for media in media_items]
                 to_insert, to_update = self._separate_media_items(session, data_list)
                 self._insert_new_media(session, to_insert)
@@ -317,11 +384,8 @@ class DBOperations:
             是否成功
         """
         try:
-            # 类型断言：已在 __init__ 中检查只支持 MySQL
-            assert isinstance(self.db, MySQLManager)
-
             # 第一次尝试：查询并标记
-            with self.db.get_session() as session:
+            with self._get_session() as session:
                 stmt = select(ListingInfoORM).where(ListingInfoORM.listing_id == listing_id)
                 listing = session.scalar(stmt)
                 if listing:
@@ -337,7 +401,7 @@ class DBOperations:
             self._flush_listing_buffer()
 
             # 第二次尝试：刷新缓冲区后重新查询
-            with self.db.get_session() as session:
+            with self._get_session() as session:
                 stmt = select(ListingInfoORM).where(ListingInfoORM.listing_id == listing_id)
                 listing = session.scalar(stmt)
                 if listing:
@@ -363,9 +427,7 @@ class DBOperations:
             是否存在
         """
         try:
-            # 类型断言：已在 __init__ 中检查只支持 MySQL
-            assert isinstance(self.db, MySQLManager)
-            with self.db.get_session() as session:
+            with self._get_session() as session:
                 stmt = select(ListingInfoORM).where(ListingInfoORM.listing_id == listing_id)
                 result = session.scalar(stmt)
                 return result is not None
@@ -384,13 +446,11 @@ class DBOperations:
             是否完成
         """
         try:
-            # 类型断言：已在 __init__ 中检查只支持 MySQL
-            assert isinstance(self.db, MySQLManager)
-            with self.db.get_session() as session:
+            with self._get_session() as session:
                 stmt = select(ListingInfoORM).where(ListingInfoORM.listing_id == listing_id)
                 listing = session.scalar(stmt)
                 if listing:
-                    return listing.is_completed
+                    return bool(listing.is_completed)
                 return False
         except Exception as e:
             logger.error(f"检查房源完成状态失败: {e}")
@@ -411,9 +471,7 @@ class DBOperations:
             if not listing_ids:
                 return {}
 
-            # 类型断言：已在 __init__ 中检查只支持 MySQL
-            assert isinstance(self.db, MySQLManager)
-            with self.db.get_session() as session:
+            with self._get_session() as session:
                 stmt = select(ListingInfoORM).where(ListingInfoORM.listing_id.in_(listing_ids))
                 results = session.scalars(stmt).all()
 
@@ -449,8 +507,7 @@ class DBOperations:
             已完成房源数量
         """
         try:
-            assert isinstance(self.db, MySQLManager)
-            with self.db.get_session() as session:
+            with self._get_session() as session:
                 stmt = select(func.count(ListingInfoORM.listing_id)).where(
                     ListingInfoORM.is_completed == True  # noqa: E712
                 )
