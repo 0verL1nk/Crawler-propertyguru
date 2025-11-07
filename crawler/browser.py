@@ -25,7 +25,7 @@ except ImportError:
     Chrome = None  # type: ignore[assignment, misc]
 
 try:
-    import undetected_chromedriver as uc
+    import undetected_chromedriver as uc  # type: ignore[import-untyped]
 except ImportError:
     uc = None
 

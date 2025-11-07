@@ -18,7 +18,7 @@ from sqlalchemy.pool import QueuePool
 
 # Redis 为可选依赖
 try:
-    import redis
+    import redis  # type: ignore[import-not-found]
 
     REDIS_AVAILABLE = True
 except ImportError:

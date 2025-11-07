@@ -35,17 +35,11 @@ if config_file.exists():
     log_config = temp_config.get_section("logging")
     log_level = log_config.get("level", "INFO")
     log_file = log_config.get("file", "logs/crawler.log")
-    log_rotation = log_config.get("rotation", "10 MB")
-    log_retention = log_config.get("retention", "30 days")
 else:
     log_level = "INFO"
     log_file = "logs/crawler.log"
-    log_rotation = "10 MB"
-    log_retention = "30 days"
 
-logger = get_logger(
-    "Main", log_file=log_file, level=log_level, rotation=log_rotation, retention=log_retention
-)
+logger = get_logger("Main", log_file=log_file, level=log_level)
 
 
 def load_config():
