@@ -1165,25 +1165,45 @@ class DetailPageParser:
             modal_body = self.browser.find_element(
                 By.CSS_SELECTOR, '[da-id="property-details-modal-body"]'
             )
-            wrappers = modal_body.find_elements(By.CSS_SELECTOR, ".property-modal-body-wrapper")
+
+            # 优化：一次性获取整个模态框的HTML，然后批量解析（避免循环中多次访问DOM）
+            logger.debug("缓存模态框DOM的HTML...")
+            modal_html = modal_body.get_attribute("outerHTML")
+            if not modal_html:
+                logger.warning("无法获取模态框HTML")
+                return
+
+            # 使用BeautifulSoup一次性解析所有wrapper
+            logger.debug("使用BeautifulSoup批量解析模态框HTML...")
+            soup = BeautifulSoup(modal_html, "lxml")
+            wrappers = soup.find_all("div", class_="property-modal-body-wrapper")
             logger.debug(f"找到 {len(wrappers)} 个模态框wrapper")
 
+            # 批量提取所有字段
+            extracted_count = 0
             for wrapper in wrappers:
                 try:
-                    icon = wrapper.find_element(By.CSS_SELECTOR, "img.property-modal-body-icon")
-                    value_elem = wrapper.find_element(
-                        By.CSS_SELECTOR, '[da-id="property-modal-value"]'
-                    )
+                    icon_elem = wrapper.find("img", class_="property-modal-body-icon")
+                    value_elem = wrapper.find(attrs={"da-id": "property-modal-value"})
 
-                    alt = icon.get_attribute("alt") or ""
-                    text = value_elem.text.strip()
-                    self._add_to_property_dict(property_details_dict, alt, text)
-                    logger.debug(
-                        f"从模态框提取到字段: {alt} = {text[:50] if len(text) > 50 else text}"
-                    )
+                    if not icon_elem or not value_elem:
+                        continue
+
+                    alt_attr = icon_elem.get("alt", "")
+                    alt = str(alt_attr) if alt_attr else ""
+                    text = value_elem.get_text(strip=True)
+
+                    if alt and text:
+                        self._add_to_property_dict(property_details_dict, alt, text)
+                        extracted_count += 1
+                        logger.debug(
+                            f"从模态框提取到字段: {alt} = {text[:50] if len(text) > 50 else text}"
+                        )
                 except Exception as e:
                     logger.debug(f"解析modal wrapper失败: {e}")
                     continue
+
+            logger.debug(f"模态框字段提取完成，共提取 {extracted_count} 个字段")
 
         except Exception as e:
             logger.debug(f"提取模态框Property details失败: {e}", exc_info=True)

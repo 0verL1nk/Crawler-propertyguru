@@ -148,9 +148,9 @@ def parse_args():
     parser.add_argument(
         "--interval",
         type=int,
-        default=5,
+        default=10,
         metavar="MINUTES",
-        help="更新模式循环间隔（分钟），0 表示只执行一次（默认：5）",
+        help="更新模式循环间隔（分钟），0 表示只执行一次（默认：10）",
     )
     parser.add_argument(
         "--max-pages",

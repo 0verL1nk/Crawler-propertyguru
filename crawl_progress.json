@@ -1,8 +1,8 @@
 {
-  "last_page": 1,
+  "last_page": 17,
   "start_time": "2025-11-07T18:06:49.072219",
-  "last_update": "2025-11-07T20:50:46.588977",
-  "total_processed": 1,
-  "total_time_seconds": 137.8239779472351,
-  "average_time_per_listing": 137.82
+  "last_update": "2025-11-08T13:08:41.461258",
+  "total_processed": 195,
+  "total_time_seconds": 41584.79865145683,
+  "average_time_per_listing": 213.26
 }

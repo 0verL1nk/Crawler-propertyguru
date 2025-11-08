@@ -7,6 +7,7 @@ PropertyGuru爬虫主类
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 import time
 from typing import TYPE_CHECKING, Any
@@ -18,7 +19,7 @@ from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_ex
 
 from utils.logger import get_logger
 
-from .browser import LocalBrowser, RemoteBrowser, UndetectedBrowser
+from .browser import LocalBrowser, PuppeteerRemoteBrowser, RemoteBrowser, UndetectedBrowser
 from .database import DatabaseManager  # 保留用于MongoDB
 from .database_factory import get_database
 from .db_operations import DBOperations
@@ -51,7 +52,9 @@ class PropertyGuruCrawler:
         self.config = config
 
         # 初始化组件
-        self.browser: RemoteBrowser | LocalBrowser | UndetectedBrowser | None = None
+        self.browser: (
+            RemoteBrowser | LocalBrowser | UndetectedBrowser | PuppeteerRemoteBrowser | None
+        ) = None
         self.sql_db: SQLDatabaseInterface | None = None  # SQL数据库（MySQL/PostgreSQL）
         self.mongo_db: DatabaseManager | None = None  # MongoDB（旧的DatabaseManager）
         self.db_ops: DBOperations | None = None
@@ -148,7 +151,42 @@ class PropertyGuruCrawler:
             # 使用本地浏览器（测试）
             logger.debug("使用本地浏览器模式（测试）")
             headless = os.getenv("BROWSER_HEADLESS", "false").lower() == "true"
-            self.browser = LocalBrowser(headless=headless)
+            # 性能优化选项
+            disable_images = (
+                os.getenv("BROWSER_DISABLE_IMAGES", "true").lower() == "true"
+            )  # 默认禁用图片
+            page_load_strategy = os.getenv(
+                "BROWSER_PAGE_LOAD_STRATEGY", "eager"
+            )  # 默认使用 eager 策略
+            self.browser = LocalBrowser(
+                headless=headless,
+                disable_images=disable_images,
+                page_load_strategy=page_load_strategy,
+            )
+
+        elif browser_type == "puppeteer":
+            # 使用 Puppeteer 远程浏览器
+            logger.debug("使用 Puppeteer 远程浏览器模式")
+            browser_ws_endpoint = os.getenv("PUPPETEER_WS_ENDPOINT")
+            if not browser_ws_endpoint:
+                raise ValueError(
+                    "未配置PUPPETEER_WS_ENDPOINT环境变量\n"
+                    "提示：\n"
+                    "  - 使用 Puppeteer 远程浏览器：配置 PUPPETEER_WS_ENDPOINT\n"
+                    "  - 格式: PUPPETEER_WS_ENDPOINT=ws://localhost:9222/devtools/browser/xxx"
+                )
+            # 性能优化选项
+            disable_images = (
+                os.getenv("BROWSER_DISABLE_IMAGES", "true").lower() == "true"
+            )  # 默认禁用图片
+            page_load_strategy = os.getenv(
+                "BROWSER_PAGE_LOAD_STRATEGY", "eager"
+            )  # 默认使用 eager 策略
+            self.browser = PuppeteerRemoteBrowser(
+                browser_ws_endpoint=browser_ws_endpoint,
+                disable_images=disable_images,
+                page_load_strategy=page_load_strategy,
+            )
 
         else:
             # 使用远程浏览器（Bright Data）
@@ -157,12 +195,24 @@ class PropertyGuruCrawler:
                 raise ValueError(
                     "未配置BROWSER_AUTH环境变量\n"
                     "提示：\n"
-                    "  - 使用远程浏览器：配置 BROWSER_AUTH\n"
+                    "  - 使用远程浏览器（Bright Data）：配置 BROWSER_AUTH\n"
                     "  - 使用本地浏览器：设置 BROWSER_TYPE=local\n"
-                    "  - 使用反检测浏览器：设置 BROWSER_TYPE=undetected"
+                    "  - 使用反检测浏览器：设置 BROWSER_TYPE=undetected\n"
+                    "  - 使用 Puppeteer 远程浏览器：设置 BROWSER_TYPE=puppeteer 并配置 PUPPETEER_WS_ENDPOINT"
                 )
             logger.debug("使用远程浏览器模式（Bright Data）")
-            self.browser = RemoteBrowser(auth=browser_auth)
+            # 性能优化选项
+            disable_images = (
+                os.getenv("BROWSER_DISABLE_IMAGES", "true").lower() == "true"
+            )  # 默认禁用图片
+            page_load_strategy = os.getenv(
+                "BROWSER_PAGE_LOAD_STRATEGY", "eager"
+            )  # 默认使用 eager 策略
+            self.browser = RemoteBrowser(
+                auth=browser_auth,
+                disable_images=disable_images,
+                page_load_strategy=page_load_strategy,
+            )
 
     def _init_database(self):
         """初始化数据库"""
@@ -276,34 +326,129 @@ class PropertyGuruCrawler:
             raise RuntimeError("浏览器未初始化")
         self.browser.connect()
 
-    def get_max_pages(self) -> int | None:
+    def _safe_navigate(self, url: str, max_retries: int = 2) -> None:
         """
-        获取最大页数
+        安全导航，自动处理 navigate_limit 和 WebSocket 连接错误
+
+        Args:
+            url: 要导航的URL
+            max_retries: 最大重试次数（包括重启浏览器）
+        """
+        if not self.browser:
+            raise RuntimeError("浏览器未初始化")
+        for attempt in range(max_retries):
+            try:
+                self.browser.get(url)
+                return  # 成功导航
+            except Exception as nav_error:
+                error_msg = str(nav_error)
+                # 检查是否需要重新连接浏览器
+                should_reconnect = False
+
+                if "navigate_limit" in error_msg or "Page.navigate limit reached" in error_msg:
+                    logger.warning(f"遇到导航限制（尝试 {attempt + 1}/{max_retries}）")
+                    should_reconnect = True
+                elif "cdp_ws_error" in error_msg or "WebSocket connection closed" in error_msg:
+                    logger.warning(
+                        f"WebSocket 连接关闭（尝试 {attempt + 1}/{max_retries}），将重新连接浏览器"
+                    )
+                    should_reconnect = True
+                elif "cannot determine loading status" in error_msg:
+                    logger.warning(
+                        f"无法确定加载状态（尝试 {attempt + 1}/{max_retries}），可能是连接问题，将重新连接浏览器"
+                    )
+                    should_reconnect = True
+
+                if should_reconnect and attempt < max_retries - 1:
+                    logger.info("关闭并重新连接浏览器...")
+                    time.sleep(2)
+                    # 关闭并重新连接浏览器
+                    if self.browser:
+                        try:
+                            self.browser.close()
+                        except Exception as e:
+                            logger.debug(f"关闭浏览器时出错（可忽略）: {e}")
+                    self.connect_browser()
+                    time.sleep(1)  # 等待浏览器完全启动
+                elif should_reconnect:
+                    logger.error("已达到最大重试次数，无法继续")
+                    raise
+                else:
+                    # 其他错误直接抛出
+                    raise
+
+    def get_max_pages(self, max_retries: int = 3) -> int | None:
+        """
+        获取最大页数（带重试机制）
+
+        Args:
+            max_retries: 最大重试次数
 
         Returns:
             最大页数
         """
-        try:
-            if not self.browser:
-                raise RuntimeError("浏览器未初始化")
-            url = f"{self.BASE_URL}/1"
-            self.browser.get(url)
+        for attempt in range(max_retries):
+            try:
+                if not self.browser:
+                    raise RuntimeError("浏览器未初始化")
+                url = f"{self.BASE_URL}/1"
+                self._safe_navigate(url)
 
-            # 等待页面加载
-            if not self.browser.driver:
-                raise RuntimeError("浏览器驱动未初始化")
-            wait = WebDriverWait(self.browser.driver, timeout=30)
-            wait.until(
-                EC.presence_of_element_located((By.CSS_SELECTOR, 'ul[da-id="hui-pagination"]'))
-            )
+                # 等待页面加载
+                if not self.browser.driver:
+                    raise RuntimeError("浏览器驱动未初始化")
+                wait = WebDriverWait(self.browser.driver, timeout=30)
+                wait.until(
+                    EC.presence_of_element_located((By.CSS_SELECTOR, 'ul[da-id="hui-pagination"]'))
+                )
 
-            parser = ListingPageParser(self.browser)
-            max_pages = parser.get_max_pages()
-            return max_pages
+                parser = ListingPageParser(self.browser)
+                max_pages = parser.get_max_pages()
+                if max_pages:
+                    return max_pages
+                # 如果返回 None，可能是页面解析问题，重试
+                if attempt < max_retries - 1:
+                    logger.warning(
+                        f"获取最大页数返回 None（尝试 {attempt + 1}/{max_retries}），将重试..."
+                    )
+                    time.sleep(2)
+                    continue
+                return None
 
-        except Exception as e:
-            logger.error(f"获取最大页数失败: {e}")
-            return None
+            except Exception as e:
+                error_msg = str(e)
+                # 检查是否是 WebSocket 连接错误
+                if (
+                    "cdp_ws_error" in error_msg
+                    or "WebSocket connection closed" in error_msg
+                    or "cannot determine loading status" in error_msg
+                ):
+                    if attempt < max_retries - 1:
+                        logger.warning(
+                            f"WebSocket 连接错误（尝试 {attempt + 1}/{max_retries}），"
+                            "将重新连接浏览器并重试..."
+                        )
+                        time.sleep(2)
+                        # 重新连接浏览器
+                        if self.browser:
+                            with contextlib.suppress(Exception):
+                                self.browser.close()
+                        self.connect_browser()
+                        time.sleep(1)
+                        continue
+                    else:
+                        logger.error("获取最大页数失败：已达到最大重试次数")
+                        return None
+                else:
+                    # 其他错误，记录并返回 None
+                    logger.error(f"获取最大页数失败: {e}")
+                    if attempt < max_retries - 1:
+                        logger.info(f"将重试（尝试 {attempt + 1}/{max_retries}）...")
+                        time.sleep(2)
+                        continue
+                    return None
+
+        return None
 
     def get_listing_ids_from_page(self, page_num: int) -> list[tuple[int, str]]:
         """
@@ -321,7 +466,7 @@ class PropertyGuruCrawler:
             url = f"{self.BASE_URL}/{page_num}"
             logger.debug(f"获取列表页房源IDs: {url}")
 
-            self.browser.get(url)
+            self._safe_navigate(url)
 
             # 等待搜索结果加载
             if not self.browser.driver:
@@ -371,7 +516,7 @@ class PropertyGuruCrawler:
             url = f"{self.BASE_URL}/{page_num}"
             logger.debug(f"爬取列表页: {url}")
 
-            self.browser.get(url)
+            self._safe_navigate(url)
 
             # 等待搜索结果加载
             if not self.browser.driver:
@@ -425,19 +570,8 @@ class PropertyGuruCrawler:
             # 添加延迟，避免导航限制
             time.sleep(2)
 
-            try:
-                self.browser.get(detail_url)
-            except Exception as nav_error:
-                error_msg = str(nav_error)
-                if "navigate_limit" in error_msg or "Page.navigate limit reached" in error_msg:
-                    logger.warning("遇到导航限制，等待 5 秒后重试...")
-                    time.sleep(5)
-                    # 重新连接浏览器
-                    self.browser.close()
-                    self.connect_browser()
-                    self.browser.get(detail_url)
-                else:
-                    raise
+            # 使用安全导航方法，自动处理 navigate_limit 错误
+            self._safe_navigate(detail_url)
 
             # 等待页面加载
             if not self.browser.driver:
@@ -729,7 +863,7 @@ class PropertyGuruCrawler:
 
             if not self.browser:
                 raise RuntimeError("浏览器未初始化")
-            self.browser.get(url)
+            self._safe_navigate(url)
 
             # 等待搜索结果加载
             if not self.browser.driver:
