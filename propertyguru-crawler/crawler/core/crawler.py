@@ -19,19 +19,26 @@ from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_ex
 
 from utils.logger import get_logger
 
-from ..browser import LocalBrowser, PuppeteerRemoteBrowser, RemoteBrowser, UndetectedBrowser
+from ..browser import BrowserFactory
 from ..database import DatabaseManager  # 保留用于MongoDB
 from ..database.factory import get_database
 from ..database.operations import DBOperations
 
 if TYPE_CHECKING:
-    from .config import Config
     from ..database.interface import SQLDatabaseInterface
     from ..models import ListingInfo, MediaItem
-from ..storage.media_processor import MediaProcessor
+    from .config import Config
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from ..pages.base import PageCrawler
+
+# Import new HTTP-based crawling modules
+from ..pages.factory import PageCrawlerFactory
 from ..parsers import DetailPageParser, ListingPageParser
-from ..utils.progress_manager import CrawlProgress
 from ..storage import StorageManagerProtocol, create_storage_manager
+from ..storage.media_processor import MediaProcessor
+from ..utils.progress_manager import CrawlProgress
 from ..utils.watermark_remover import WatermarkRemover
 
 logger = get_logger("PropertyGuruCrawler")
@@ -52,15 +59,16 @@ class PropertyGuruCrawler:
         self.config = config
 
         # 初始化组件
-        self.browser: (
-            RemoteBrowser | LocalBrowser | UndetectedBrowser | PuppeteerRemoteBrowser | None
-        ) = None
+        self.browser: Any = None
         self.sql_db: SQLDatabaseInterface | None = None  # SQL数据库（MySQL/PostgreSQL）
         self.mongo_db: DatabaseManager | None = None  # MongoDB（旧的DatabaseManager）
         self.db_ops: DBOperations | None = None
         self.storage_manager: StorageManagerProtocol | None = None
         self.media_processor: MediaProcessor | None = None
         self.watermark_remover: WatermarkRemover | None = None
+
+        # HTTP-based listing page crawler (optional)
+        self.listing_http_crawler: PageCrawler | None = None
 
         # 爬虫配置
         crawler_config = self.config.get_section("crawler")
@@ -111,108 +119,10 @@ class PropertyGuruCrawler:
 
     def _init_browser(self):
         """初始化浏览器"""
-        # 检查浏览器类型配置
-        browser_type = os.getenv("BROWSER_TYPE", "remote").lower()
-
-        if browser_type == "undetected":
-            # 使用 Undetected Chrome（推荐用于反爬虫检测）
-            logger.debug("使用 Undetected Chrome 浏览器（反检测模式）")
-            headless = os.getenv("BROWSER_HEADLESS", "false").lower() == "true"
-            version_main = os.getenv("CHROME_VERSION")  # 可选：指定Chrome版本
-            disable_images = (
-                os.getenv("BROWSER_DISABLE_IMAGES", "true").lower() == "true"
-            )  # 默认禁用图片
-
-            # 虚拟显示模式（有头模式但不显示窗口）
-            use_virtual_display = (
-                os.getenv("BROWSER_USE_VIRTUAL_DISPLAY", "false").lower() == "true"
-            )
-
-            # ChromeDriver路径（可选：用于ARM64等非x86架构）
-            driver_path = os.getenv("CHROMEDRIVER_PATH")
-            browser_path = os.getenv("CHROME_BINARY_PATH")
-            kwargs: dict[str, str] = {}
-            if driver_path:
-                kwargs["driver_executable_path"] = driver_path
-                logger.debug(f"使用指定的ChromeDriver路径: {driver_path}")
-            if browser_path:
-                kwargs["browser_executable_path"] = browser_path
-                logger.debug(f"使用指定的浏览器路径: {browser_path}")
-
-            self.browser = UndetectedBrowser(
-                headless=headless,
-                version_main=int(version_main) if version_main else None,
-                disable_images=disable_images,
-                use_virtual_display=use_virtual_display,
-                **kwargs,  # type: ignore[arg-type]
-            )
-
-        elif browser_type == "local":
-            # 使用本地浏览器（测试）
-            logger.debug("使用本地浏览器模式（测试）")
-            headless = os.getenv("BROWSER_HEADLESS", "false").lower() == "true"
-            # 性能优化选项
-            disable_images = (
-                os.getenv("BROWSER_DISABLE_IMAGES", "true").lower() == "true"
-            )  # 默认禁用图片
-            page_load_strategy = os.getenv(
-                "BROWSER_PAGE_LOAD_STRATEGY", "eager"
-            )  # 默认使用 eager 策略
-            self.browser = LocalBrowser(
-                headless=headless,
-                disable_images=disable_images,
-                page_load_strategy=page_load_strategy,
-            )
-
-        elif browser_type == "puppeteer":
-            # 使用 Puppeteer 远程浏览器
-            logger.debug("使用 Puppeteer 远程浏览器模式")
-            browser_ws_endpoint = os.getenv("PUPPETEER_WS_ENDPOINT")
-            if not browser_ws_endpoint:
-                raise ValueError(
-                    "未配置PUPPETEER_WS_ENDPOINT环境变量\n"
-                    "提示：\n"
-                    "  - 使用 Puppeteer 远程浏览器：配置 PUPPETEER_WS_ENDPOINT\n"
-                    "  - 格式: PUPPETEER_WS_ENDPOINT=ws://localhost:9222/devtools/browser/xxx"
-                )
-            # 性能优化选项
-            disable_images = (
-                os.getenv("BROWSER_DISABLE_IMAGES", "true").lower() == "true"
-            )  # 默认禁用图片
-            page_load_strategy = os.getenv(
-                "BROWSER_PAGE_LOAD_STRATEGY", "eager"
-            )  # 默认使用 eager 策略
-            self.browser = PuppeteerRemoteBrowser(
-                browser_ws_endpoint=browser_ws_endpoint,
-                disable_images=disable_images,
-                page_load_strategy=page_load_strategy,
-            )
-
-        else:
-            # 使用远程浏览器（Bright Data）
-            browser_auth = os.getenv("BROWSER_AUTH")
-            if not browser_auth:
-                raise ValueError(
-                    "未配置BROWSER_AUTH环境变量\n"
-                    "提示：\n"
-                    "  - 使用远程浏览器（Bright Data）：配置 BROWSER_AUTH\n"
-                    "  - 使用本地浏览器：设置 BROWSER_TYPE=local\n"
-                    "  - 使用反检测浏览器：设置 BROWSER_TYPE=undetected\n"
-                    "  - 使用 Puppeteer 远程浏览器：设置 BROWSER_TYPE=puppeteer 并配置 PUPPETEER_WS_ENDPOINT"
-                )
-            logger.debug("使用远程浏览器模式（Bright Data）")
-            # 性能优化选项
-            disable_images = (
-                os.getenv("BROWSER_DISABLE_IMAGES", "true").lower() == "true"
-            )  # 默认禁用图片
-            page_load_strategy = os.getenv(
-                "BROWSER_PAGE_LOAD_STRATEGY", "eager"
-            )  # 默认使用 eager 策略
-            self.browser = RemoteBrowser(
-                auth=browser_auth,
-                disable_images=disable_images,
-                page_load_strategy=page_load_strategy,
-            )
+        # 使用工厂模式创建浏览器实例
+        logger.debug("使用浏览器工厂创建浏览器实例")
+        self.browser = BrowserFactory.create_browser()
+        logger.debug(f"浏览器实例创建成功: {type(self.browser).__name__}")
 
     def _init_database(self):
         """初始化数据库"""
@@ -322,7 +232,19 @@ class PropertyGuruCrawler:
         proxy_manager, direct_proxy_url = self._init_proxy()
         self._init_watermark_remover(proxy_manager, direct_proxy_url)
         self._init_media_processor(proxy_manager, direct_proxy_url)
+        self._init_http_crawler()
         logger.info("PropertyGuru爬虫初始化完成")
+
+    def _init_http_crawler(self):
+        """初始化HTTP爬虫（可选）"""
+        try:
+            # 检查是否启用HTTP爬虫
+            use_http_crawler = os.getenv("USE_HTTP_CRAWLER", "false").lower() == "true"
+            if use_http_crawler:
+                self.listing_http_crawler = PageCrawlerFactory.create_listing_crawler("http")
+                logger.info("HTTP列表页爬虫已初始化")
+        except Exception as e:
+            logger.warning(f"HTTP列表页爬虫初始化失败: {e}")
 
     def connect_browser(self):
         """连接浏览器"""
@@ -470,6 +392,15 @@ class PropertyGuruCrawler:
         Returns:
             (listing_id, detail_url) 元组列表
         """
+        # 如果启用了HTTP爬虫且已初始化，优先使用HTTP爬虫
+        if self.listing_http_crawler:
+            try:
+                logger.debug(f"使用HTTP爬虫获取列表页房源IDs: {page_num}")
+                return self.listing_http_crawler.get_listing_ids_from_page(page_num)
+            except Exception as e:
+                logger.warning(f"HTTP爬虫失败，回退到浏览器爬虫: {e}")
+
+        # 否则使用原有的浏览器爬虫
         try:
             if not self.browser:
                 raise RuntimeError("浏览器未初始化")
@@ -520,6 +451,15 @@ class PropertyGuruCrawler:
         Returns:
             房源信息列表
         """
+        # 如果启用了HTTP爬虫且已初始化，优先使用HTTP爬虫
+        if self.listing_http_crawler:
+            try:
+                logger.debug(f"使用HTTP爬虫爬取列表页: {page_num}")
+                return self.listing_http_crawler.crawl_listing_page_sync(page_num, enable_geocoding)
+            except Exception as e:
+                logger.warning(f"HTTP爬虫失败，回退到浏览器爬虫: {e}")
+
+        # 否则使用原有的浏览器爬虫
         try:
             if not self.browser:
                 raise RuntimeError("浏览器未初始化")
@@ -863,57 +803,87 @@ class PropertyGuruCrawler:
         用于测试爬虫功能是否正常
         """
         try:
-            # 连接浏览器
-            self.connect_browser()
+            # 如果启用了HTTP爬虫且已初始化，优先使用HTTP爬虫
+            if self.listing_http_crawler:
+                logger.info("获取第一页列表 (使用HTTP爬虫)...")
 
-            logger.info("获取第一页列表...")
-            # 只解析第一个卡片，而不是解析所有卡片
-            url = f"{self.BASE_URL}/1"
-            logger.info(f"爬取列表页: {url}")
+                # 使用HTTP爬虫获取列表页数据
+                listings = self.listing_http_crawler.crawl_listing_page_sync(1)
 
-            if not self.browser:
-                raise RuntimeError("浏览器未初始化")
-            self._safe_navigate(url)
+                if not listings:
+                    logger.error("第一页没有找到房源")
+                    return
 
-            # 等待搜索结果加载
-            if not self.browser.driver:
-                raise RuntimeError("浏览器驱动未初始化")
-            wait = WebDriverWait(self.browser.driver, timeout=30)
-            wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "div.search-result-root")))
+                first_listing = listings[0]
+                logger.info(f"测试爬取第一个房源: {first_listing.listing_id} - {first_listing.title}")
 
-            # 解析页面，只提取第一个卡片（使用HTML缓存优化）
-            parser = ListingPageParser(self.browser)
-            cards_html = parser.extract_listing_cards_html()
+                # 连接浏览器以爬取详情页（detail pages通常需要JavaScript）
+                self.connect_browser()
 
-            if not cards_html:
-                logger.error("第一页没有找到房源卡片")
-                return
+                success = await self.crawl_listing(first_listing)
 
-            logger.info(f"找到 {len(cards_html)} 个房产卡片，只解析第一个...")
-            first_listing = parser.parse_listing_card_html(cards_html[0])
+                if success:
+                    logger.info("✅ 测试成功！第一个房源爬取完成")
 
-            if not first_listing:
-                logger.error("解析第一个卡片失败")
-                return
+                    # 刷新数据库缓冲区
+                    if self.db_ops:
+                        self.db_ops.flush_all()
+                else:
+                    logger.error("❌ 测试失败！请检查日志")
 
-            logger.info(f"测试爬取第一个房源: {first_listing.listing_id} - {first_listing.title}")
-
-            success = await self.crawl_listing(first_listing)
-
-            if success:
-                logger.info("✅ 测试成功！第一个房源爬取完成")
-
-                # 刷新数据库缓冲区
-                if self.db_ops:
-                    self.db_ops.flush_all()
             else:
-                logger.error("❌ 测试失败！请检查日志")
+                # 回退到原有浏览器方式
+                # 连接浏览器
+                self.connect_browser()
+
+                logger.info("获取第一页列表...")
+                # 只解析第一个卡片，而不是解析所有卡片
+                url = f"{self.BASE_URL}/1"
+                logger.info(f"爬取列表页: {url}")
+
+                if not self.browser:
+                    raise RuntimeError("浏览器未初始化")
+                self._safe_navigate(url)
+
+                # 等待搜索结果加载
+                if not self.browser.driver:
+                    raise RuntimeError("浏览器驱动未初始化")
+                wait = WebDriverWait(self.browser.driver, timeout=30)
+                wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "div.search-result-root")))
+
+                # 解析页面，只提取第一个卡片（使用HTML缓存优化）
+                parser = ListingPageParser(self.browser)
+                cards_html = parser.extract_listing_cards_html()
+
+                if not cards_html:
+                    logger.error("第一页没有找到房源卡片")
+                    return
+
+                logger.info(f"找到 {len(cards_html)} 个房产卡片，只解析第一个...")
+                first_listing = parser.parse_listing_card_html(cards_html[0])
+
+                if not first_listing:
+                    logger.error("解析第一个卡片失败")
+                    return
+
+                logger.info(f"测试爬取第一个房源: {first_listing.listing_id} - {first_listing.title}")
+
+                success = await self.crawl_listing(first_listing)
+
+                if success:
+                    logger.info("✅ 测试成功！第一个房源爬取完成")
+
+                    # 刷新数据库缓冲区
+                    if self.db_ops:
+                        self.db_ops.flush_all()
+                else:
+                    logger.error("❌ 测试失败！请检查日志")
 
         except Exception as e:
             logger.error(f"测试过程出错: {e}", exc_info=True)
             raise
         finally:
-            # 关闭浏览器
+            # 关闭浏览器（当浏览器已连接时）
             if self.browser:
                 self.browser.close()
 

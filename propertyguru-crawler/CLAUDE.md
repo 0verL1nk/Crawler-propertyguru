@@ -133,3 +133,4 @@ Key test categories:
 - Proxy handling
 - Watermark removal
 - Database operations
+- 可以使用`source ./.venv/bin/activate &&make check > ./logs/check_result.txt`进行代码检查

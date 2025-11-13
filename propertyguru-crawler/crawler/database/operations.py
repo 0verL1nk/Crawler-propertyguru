@@ -12,8 +12,8 @@ from sqlalchemy import func, insert, select
 
 from utils.logger import get_logger
 
-from .legacy import DatabaseManager, MySQLManager
 from .interface import SQLDatabaseInterface
+from .legacy import DatabaseManager, MySQLManager
 from .orm_models import ListingInfoORM, MediaItemORM
 
 if TYPE_CHECKING:

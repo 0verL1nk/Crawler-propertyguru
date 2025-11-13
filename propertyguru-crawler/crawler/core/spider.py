@@ -21,10 +21,10 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 
 from utils.logger import get_logger
 
-from .config import Config
 from ..database import DatabaseManager
-from ..utils.proxy_manager import ProxyManager
 from ..storage import StorageManagerProtocol, create_storage_manager
+from ..utils.proxy_manager import ProxyManager
+from .config import Config
 
 
 class DatabaseProtocol(Protocol):

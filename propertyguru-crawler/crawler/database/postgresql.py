@@ -18,9 +18,10 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker as sa_sessionmaker
 from sqlalchemy.pool import QueuePool
 
-from .interface import SQLDatabaseInterface
 from utils.logger import get_logger
 from utils.retry import retry_on_error
+
+from .interface import SQLDatabaseInterface
 
 logger = get_logger("PostgreSQLManager")
 

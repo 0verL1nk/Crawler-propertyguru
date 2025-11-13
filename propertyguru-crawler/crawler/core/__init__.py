@@ -1,7 +1,7 @@
 """核心爬虫模块"""
 
+from .config import Config
 from .crawler import PropertyGuruCrawler
 from .spider import Spider
-from .config import Config
 
 __all__ = ["PropertyGuruCrawler", "Spider", "Config"]

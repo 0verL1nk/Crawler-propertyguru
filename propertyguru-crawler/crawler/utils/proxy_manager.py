@@ -211,11 +211,7 @@ class ProxyManager:
     def _load_proxies(self):
         """加载代理列表"""
         # 对于直连代理API，优先从持久化文件加载未过期的IP
-        if self.pool_type == "direct_api":
-            self._load_from_persistent_pool()
-            # 不再在初始化时自动补充IP，只有在实际使用时才补充
-            # 这样可以避免在不需要代理时浪费IP资源
-        elif self.pool_type == "cloudbypass":
+        if self.pool_type == "direct_api" or self.pool_type == "cloudbypass":
             self._load_from_persistent_pool()
         elif self.pool_type == "file":
             self._load_from_file()

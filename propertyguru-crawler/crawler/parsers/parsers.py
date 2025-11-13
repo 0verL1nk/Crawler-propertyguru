@@ -16,6 +16,7 @@ from urllib.parse import urljoin
 from bs4 import BeautifulSoup
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.support.wait import WebDriverWait
 
 if TYPE_CHECKING:
     from selenium.webdriver.remote.webelement import WebElement
@@ -1624,8 +1625,6 @@ class DetailPageParser:
             if not buttons:
                 logger.debug("未找到 'Show all media' 按钮，可能不需要展开")
                 return
-
-            from selenium.webdriver.support.wait import WebDriverWait
 
             short_wait = WebDriverWait(self.browser.driver, timeout=5)
             view_more_btn = short_wait.until(
