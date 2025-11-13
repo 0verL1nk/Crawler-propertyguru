@@ -1,0 +1,62 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    cluster: 'property-search'
+    environment: 'production'
+
+# Alertmanager 配置（可选）
+# alerting:
+#   alertmanagers:
+#     - static_configs:
+#         - targets:
+#           - alertmanager:9093
+
+# 规则文件
+rule_files:
+  - 'alerts/*.yml'
+
+# 抓取配置
+scrape_configs:
+  # Prometheus 自身监控
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # PostgreSQL 监控（需要 postgres_exporter）
+  - job_name: 'postgres'
+    static_configs:
+      - targets: ['postgres-exporter:9187']
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+        replacement: 'property-postgres'
+
+  # 搜索引擎监控（需要应用暴露 metrics）
+  - job_name: 'property-searcher'
+    static_configs:
+      - targets: ['searcher:8080']
+    metrics_path: '/metrics'
+
+  # Nginx 监控（需要 nginx-prometheus-exporter）
+  - job_name: 'nginx'
+    static_configs:
+      - targets: ['nginx-exporter:9113']
+
+  # Redis 监控（需要 redis_exporter）
+  - job_name: 'redis'
+    static_configs:
+      - targets: ['redis-exporter:9121']
+
+  # Node Exporter（系统监控）
+  - job_name: 'node'
+    static_configs:
+      - targets: ['node-exporter:9100']
+        labels:
+          instance: 'property-server'
+
+  # cAdvisor（容器监控）
+  - job_name: 'cadvisor'
+    static_configs:
+      - targets: ['cadvisor:8080']
+

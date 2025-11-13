@@ -1,0 +1,91 @@
+version: '3.8'
+
+services:
+  # PostgreSQL 数据库服务
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: property-postgres
+    environment:
+      POSTGRES_USER: property_user
+      POSTGRES_PASSWORD: property_password
+      POSTGRES_DB: property_search
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      # 自动执行初始化脚本
+      - ../propertyguru/sql/init_postgresql_unified.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U property_user -d property_search"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - property-network
+    restart: unless-stopped
+
+  # 搜索引擎服务
+  searcher:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: property-searcher
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      # PostgreSQL 配置（使用完整 URL 优先）
+      DATABASE_URL: postgresql://property_user:property_password@postgres:5432/property_search?sslmode=disable
+      # 或使用分散的配置项：
+      # PG_HOST: postgres
+      # PG_PORT: 5432
+      # PG_USER: property_user
+      # PG_PASSWORD: property_password
+      # PG_DATABASE: property_search
+      # PG_SSLMODE: disable
+      PG_MAX_CONNECTIONS: 25
+      PG_MAX_IDLE_CONNECTIONS: 5
+      
+      # 服务器配置
+      SERVER_PORT: 8080
+      SERVER_HOST: 0.0.0.0
+      GIN_MODE: release
+      
+      # CORS 配置
+      CORS_ALLOWED_ORIGINS: "*"
+      CORS_ALLOWED_METHODS: GET,POST,PUT,DELETE,OPTIONS
+      CORS_ALLOWED_HEADERS: Content-Type,Authorization
+      
+      # 日志配置
+      LOG_LEVEL: info
+      LOG_FORMAT: json
+      
+      # 搜索配置
+      SEARCH_DEFAULT_LIMIT: 20
+      SEARCH_MAX_LIMIT: 100
+      SEARCH_DEFAULT_OFFSET: 0
+      
+      # 排序权重
+      RANK_WEIGHT_TEXT: 0.5
+      RANK_WEIGHT_PRICE: 0.3
+      RANK_WEIGHT_RECENCY: 0.2
+    ports:
+      - "8080:8080"
+    networks:
+      - property-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+networks:
+  property-network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+    driver: local
+

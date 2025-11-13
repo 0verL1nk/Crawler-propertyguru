@@ -1,0 +1,217 @@
+name: Docker Build and Test
+
+on:
+  push:
+    branches: [ main, develop ]
+    tags: [ 'v*.*.*' ]
+  pull_request:
+    branches: [ main, develop ]
+
+env:
+  IMAGE_NAME: property-searcher
+
+jobs:
+  # 代码检查和测试
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.21'
+
+      - name: Cache Go modules
+        uses: actions/cache@v3
+        with:
+          path: ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Run go vet
+        run: go vet ./...
+
+      - name: Run go fmt check
+        run: |
+          if [ "$(gofmt -s -l . | wc -l)" -gt 0 ]; then
+            echo "Code is not formatted:"
+            gofmt -s -l .
+            exit 1
+          fi
+
+      - name: Run tests
+        run: go test -v -race -coverprofile=coverage.txt -covermode=atomic ./...
+
+      - name: Upload coverage
+        uses: codecov/codecov-action@v3
+        if: always()
+        with:
+          file: ./coverage.txt
+          fail_ci_if_error: false
+
+  # Docker 镜像构建
+  build:
+    name: Build Docker Image
+    runs-on: ubuntu-latest
+    needs: test
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Cache Docker layers
+        uses: actions/cache@v3
+        with:
+          path: /tmp/.buildx-cache
+          key: ${{ runner.os }}-buildx-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-buildx-
+
+      - name: Build Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: false
+          tags: ${{ env.IMAGE_NAME }}:test
+          cache-from: type=local,src=/tmp/.buildx-cache
+          cache-to: type=local,dest=/tmp/.buildx-cache-new,mode=max
+
+      - name: Move cache
+        run: |
+          rm -rf /tmp/.buildx-cache
+          mv /tmp/.buildx-cache-new /tmp/.buildx-cache
+
+      - name: Test Docker image
+        run: |
+          docker run --rm -d --name test-container \
+            -e PG_HOST=postgres \
+            -e PG_PORT=5432 \
+            -e PG_USER=test \
+            -e PG_PASSWORD=test \
+            -e PG_DATABASE=test \
+            -e GIN_MODE=test \
+            ${{ env.IMAGE_NAME }}:test || true
+          sleep 5
+          docker logs test-container || true
+          docker rm -f test-container || true
+
+  # Docker Compose 集成测试
+  integration-test:
+    name: Integration Test
+    runs-on: ubuntu-latest
+    needs: test
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Create test env file
+        run: |
+          cat > .env << EOF
+          PG_HOST=postgres
+          PG_PORT=5432
+          PG_USER=property_user
+          PG_PASSWORD=test_password
+          PG_DATABASE=property_search
+          SERVER_PORT=8080
+          GIN_MODE=test
+          EOF
+
+      - name: Start services with Docker Compose
+        run: |
+          docker compose up -d
+          sleep 30
+
+      - name: Check service health
+        run: |
+          docker compose ps
+          docker compose logs
+
+      - name: Wait for services to be ready
+        run: |
+          timeout 60 bash -c 'until curl -f http://localhost:8080/health; do sleep 2; done'
+
+      - name: Run API tests
+        run: |
+          # Health check
+          curl -f http://localhost:8080/health
+          
+          # Search test
+          curl -f -X POST http://localhost:8080/api/v1/search \
+            -H "Content-Type: application/json" \
+            -d '{"query": "test query", "options": {"top_k": 5}}'
+
+      - name: Check database
+        run: |
+          docker exec property-postgres psql -U property_user -d property_search -c "\dt"
+
+      - name: Stop services
+        if: always()
+        run: |
+          docker compose logs
+          docker compose down -v
+
+  # 发布到 Docker Hub（仅标签推送）
+  publish:
+    name: Publish to Docker Hub
+    runs-on: ubuntu-latest
+    needs: [test, build, integration-test]
+    if: startsWith(github.ref, 'refs/tags/v')
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=sha
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Update Docker Hub description
+        uses: peter-evans/dockerhub-description@v3
+        if: github.ref == 'refs/heads/main'
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_TOKEN }}
+          repository: ${{ secrets.DOCKER_USERNAME }}/${{ env.IMAGE_NAME }}
+          short-description: PropertyGuru 智能搜索引擎
+          readme-filepath: ./DOCKER.md
+

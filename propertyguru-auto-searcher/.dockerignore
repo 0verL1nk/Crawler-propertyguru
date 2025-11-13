@@ -1,0 +1,60 @@
+# Git 相关
+.git
+.gitignore
+.gitattributes
+
+# 文档和说明
+README.md
+PLANE.md
+docs/
+*.md
+
+# 环境变量和配置
+.env
+*.env
+!config.example.env
+
+# 构建产物
+*.exe
+*.dll
+*.so
+*.dylib
+server
+*.test
+*.out
+dist/
+build/
+
+# 开发工具
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# 依赖目录
+vendor/
+
+# 测试和覆盖率
+coverage.txt
+*.coverprofile
+
+# 临时文件
+tmp/
+temp/
+*.tmp
+*.log
+
+# OS 特定文件
+.DS_Store
+Thumbs.db
+
+# 脚本文件（除非需要）
+scripts/
+
+# Docker 相关
+Dockerfile
+.dockerignore
+docker-compose.yml
+docker-compose.*.yml
+
