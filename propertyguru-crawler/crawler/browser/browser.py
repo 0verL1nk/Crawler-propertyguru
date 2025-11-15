@@ -9,6 +9,7 @@ from __future__ import annotations
 from .base import Browser
 from .drivers.local import LocalBrowser
 from .drivers.remote import RemoteBrowser
+from .drivers.remote_new import PyppeteerBrowserNew
 from .drivers.undetected import UndetectedBrowser
 from .factory import BrowserFactory
 
@@ -20,6 +21,7 @@ __all__ = [
     "BrowserFactory",
     "LocalBrowser",
     "RemoteBrowser",
+    "PyppeteerBrowserNew",
     "UndetectedBrowser",
     "configure_performance_options",
     "setup_media_blocking_cdp",

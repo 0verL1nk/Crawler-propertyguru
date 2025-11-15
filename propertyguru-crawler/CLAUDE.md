@@ -4,18 +4,19 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
-This is a sophisticated property listing crawler for PropertyGuru.com.sg, built with Python and Selenium/Playwright. It supports multiple browsers, proxy configurations, database storage (MySQL/PostgreSQL), media processing with watermark removal, and geographic encoding.
+This is a sophisticated property listing crawler for PropertyGuru.com.sg, built with Python and supporting multiple browser technologies, proxy configurations, database storage options, and media processing capabilities. It features a hybrid HTTP-first approach with browser fallback for optimal performance and reliability.
 
 ## Key Features
 
-- Multi-browser support: Undetected Chrome (recommended), Remote Browser (Bright Data), Local Browser, Puppeteer/Playwright
-- Proxy management with residential/IP rotation support
-- Database abstraction layer supporting MySQL and PostgreSQL with ORM models
-- Media processing pipeline with optional watermark removal
-- Geographic encoding capabilities
-- Progress tracking with resume capability
-- Update mode for incremental crawling
-- Comprehensive data parsing for property listings
+- **Multi-Browser Support**: Undetected Chrome (recommended), Remote Browser (Bright Data), Local Browser, Puppeteer/Playwright
+- **HTTP-First Architecture**: Optimized HTTP crawling with browser fallback for maximum performance
+- **Multiple Database Support**: MySQL and PostgreSQL with ORM abstraction
+- **Proxy Management**: Dynamic residential proxy support with automatic IP rotation
+- **Media Processing Pipeline**: Integrated watermark removal and S3-compatible storage
+- **Progress Tracking**: Resume capability with detailed statistics
+- **Update Mode**: Incremental crawling for ongoing data collection
+- **Geographic Encoding**: Location-based coordinate mapping
+- **Flexible Configuration**: YAML config with environment variable overrides
 
 ## Development Commands
 
@@ -40,9 +41,9 @@ cp env.example .env
 
 Key configuration options:
 - BROWSER_TYPE: undetected (recommended), remote, local, puppeteer
-- PROXY_URL: For residential proxy integration
 - DB_TYPE: mysql or postgresql
-- WATERMARK_REMOVER_*: For image processing
+- USE_HTTP_CRAWLER: true (recommended for performance)
+- HTTP_PROVIDER: direct, zenrows, scraperapi, oxylabs
 
 ### Running the Crawler
 ```bash
@@ -88,31 +89,39 @@ make pre-commit-run
 ### Core Components
 
 1. **crawler.core.crawler.py** - Main crawler orchestrator (`PropertyGuruCrawler`)
-2. **crawler.browser.browser.py** - Multi-browser abstraction layer
-3. **crawler.database** - Database abstraction with factory pattern
-4. **crawler.parsers.parsers.py** - Page parsing logic for listings and details
-5. **crawler.models.listing.py** - Data models for listings, properties, and media
-6. **crawler.storage** - Media storage and processing pipeline
-7. **crawler.utils** - Utility modules including progress tracking and proxy management
+2. **crawler.browser.factory.py** - Multi-browser abstraction factory
+3. **crawler.database.factory.py** - Database abstraction factory
+4. **crawler.pages.factory.py** - HTTP page crawling factory
+5. **crawler.http.client.py** - HTTP client with provider abstraction
+6. **crawler.storage.manager.py** - Media storage and processing pipeline
+7. **crawler.utils.progress_manager.py** - Progress tracking with resume capability
 
 ### Database Layer
 - Uses SQLAlchemy ORM with support for MySQL and PostgreSQL
 - Implements buffered writes for performance
-- Schema defined in `crawler.database.orm_models.py`
-- Factory pattern in `crawler.database.factory.py` for DB initialization
+- Schema defined in `crawler/database/orm_models.py`
+- Factory pattern in `crawler/database/factory.py` for DB initialization
 
 ### Browser Abstraction
-Supports four browser modes:
-- **UndetectedBrowser**: Enhanced anti-detection capabilities
-- **RemoteBrowser**: Bright Data scraping browser
+Supports multiple browser modes:
+- **UndetectedBrowser**: Enhanced anti-detection capabilities (recommended)
+- **RemoteBrowser**: Bright Data scraping browser (Playwright implementation)
+- **PyppeteerBrowserNew**: Default remote browser (Pyppeteer/CDP)
 - **LocalBrowser**: Standard local Chrome for testing
-- **PuppeteerRemoteBrowser**: Playwright-based remote browser
+- **PuppeteerRemoteBrowser**: Legacy Puppeteer-based remote browser
+
+### HTTP Provider Abstraction
+Supports multiple HTTP providers for bypassing anti-bot protection:
+- **DirectHttpProvider**: Direct HTTP requests (no proxy)
+- **ZenRowsHttpProvider**: ZenRows proxy service
+- **ScraperApiHttpProvider**: ScraperAPI proxy service
+- **OxylabsHttpProvider**: Oxylabs proxy service
 
 ### Data Flow
 1. Initialize components (browser, database, storage)
-2. Navigate to listing pages
-3. Parse basic listing information
-4. For each listing, navigate to detail page
+2. Navigate to listing pages (HTTP-first approach)
+3. Parse basic listing information from `__NEXT_DATA__` JSON
+4. For each listing, navigate to detail page (HTTP-first with browser fallback)
 5. Extract comprehensive property details
 6. Process and store media assets
 7. Save all data to database with completion tracking
@@ -133,4 +142,20 @@ Key test categories:
 - Proxy handling
 - Watermark removal
 - Database operations
-- 可以使用`source ./.venv/bin/activate &&make check > ./logs/check_result.txt`进行代码检查
+- HTTP provider integration
+
+## Important Notes
+
+1. **HTTP-First Approach**: The crawler prioritizes HTTP requests for performance, falling back to browser-based crawling only when necessary. Enable with `USE_HTTP_CRAWLER=true` and `USE_HTTP_DETAIL_CRAWLER=true`.
+
+2. **Proxy Configuration**: For production use, configure residential proxies (Bright Data) for reliable large-scale crawling. Set `PROXY_URL` in environment variables.
+
+3. **Database Selection**: PostgreSQL is recommended for production deployments. Configure with `DB_TYPE=postgresql` and appropriate connection settings.
+
+4. **Anti-Detection**: For evading bot detection, use `BROWSER_TYPE=undetected` with virtual display mode (`BROWSER_USE_VIRTUAL_DISPLAY=true`).
+
+5. **Media Processing**: Configure watermark removal service credentials in environment variables for image processing capabilities.
+
+6. **Performance Optimization**: Disable image loading (`BROWSER_DISABLE_IMAGES=true`) and use appropriate concurrency settings in config.yaml.
+
+7. **Code Quality**: Follow established patterns with pre-commit hooks, type checking, and comprehensive testing before committing changes.

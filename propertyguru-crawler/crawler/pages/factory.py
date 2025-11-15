@@ -32,11 +32,7 @@ class PageCrawlerFactory:
             crawler_type = os.getenv("PAGE_CRAWLER_TYPE", "browser").lower()
 
         if crawler_type == "http":
-            # 检查是否启用ZenRows
-            use_zenrows = os.getenv("USE_ZENROWS", "false").lower() == "true"
-            zenrows_apikey = os.getenv("ZENROWS_APIKEY")
-
-            return ListingHttpCrawler(use_zenrows=use_zenrows, zenrows_apikey=zenrows_apikey)
+            return ListingHttpCrawler()
 
         else:
             # 对于browser类型，我们需要返回现有的浏览器实现

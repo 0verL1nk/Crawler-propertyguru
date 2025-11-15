@@ -126,7 +126,7 @@ func Load() (*Config, error) {
 			ChatTemperature:     getEnvAsFloat("OPENAI_CHAT_TEMPERATURE", 0.2),
 			ChatTopP:            getEnvAsFloat("OPENAI_CHAT_TOP_P", 0.7),
 			ChatMaxTokens:       getEnvAsInt("OPENAI_CHAT_MAX_TOKENS", 8192),
-			ChatExtraBody:       getEnv("OPENAI_CHAT_EXTRA_BODY", `{"chat_template_kwargs":{"thinking":true}}`),
+			ChatExtraBody:       getEnv("OPENAI_CHAT_EXTRA_BODY", ``),
 			EmbeddingModel:      getEnv("OPENAI_EMBEDDING_MODEL", "baai/bge-m3"),
 			EmbeddingDimensions: getEnvAsInt("OPENAI_EMBEDDING_DIMENSIONS", 1024),
 			EmbeddingExtraBody:  getEnv("OPENAI_EMBEDDING_EXTRA_BODY", `{"truncate":"NONE"}`),

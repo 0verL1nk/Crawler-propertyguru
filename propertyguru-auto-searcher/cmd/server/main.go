@@ -1,11 +1,13 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"core/internal/config"
 	"core/internal/handler"
@@ -21,6 +23,38 @@ var (
 	BuildTime = "unknown"
 	GitCommit = "unknown"
 )
+
+// performAIHealthCheck performs a basic health check on the AI service
+func performAIHealthCheck(client *service.OpenAIClient, model string) error {
+	if client == nil || !client.IsEnabled() {
+		return fmt.Errorf("AI client is not enabled")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Test basic chat completion
+	request := service.ChatCompletionRequest{
+		Model: model,
+		Messages: []service.ChatMessage{
+			{Role: "user", Content: "Hello, this is a health check. Please respond with 'OK'."},
+		},
+		Temperature: 0.1,
+		MaxTokens:   10,
+	}
+
+	response, err := client.ChatCompletion(ctx, request)
+	if err != nil {
+		return fmt.Errorf("chat completion test failed: %w", err)
+	}
+
+	if len(response.Choices) == 0 || response.Choices[0].Message.Content == "" {
+		return fmt.Errorf("received empty response from AI service")
+	}
+
+	log.Printf("   🤖 AI service response: %s", response.Choices[0].Message.Content)
+	return nil
+}
 
 func main() {
 	// Print version info
@@ -65,6 +99,14 @@ func main() {
 		log.Printf("   - Chat MaxTokens: %d", cfg.OpenAI.ChatMaxTokens)
 		log.Printf("   - Chat ExtraBody: %s", cfg.OpenAI.ChatExtraBody)
 		log.Printf("   - Embedding ExtraBody: %s", cfg.OpenAI.EmbeddingExtraBody)
+
+		// Perform health check on AI service
+		if err := performAIHealthCheck(openaiClient, cfg.OpenAI.ChatModel); err != nil {
+			log.Printf("⚠️  AI health check failed: %v", err)
+			log.Println("   AI-powered features may not work properly")
+		} else {
+			log.Println("✅ AI service health check passed")
+		}
 	} else {
 		log.Println("⚠️  OpenAI is disabled - AI-powered search intent parsing will not work")
 		log.Println("   Set OPENAI_API_KEY environment variable to enable AI features")

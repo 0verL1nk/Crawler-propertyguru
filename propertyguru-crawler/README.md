@@ -6,6 +6,7 @@
 
 - 🚀 **高性能**: 支持异步请求和并发控制
 - 🔒 **安全可靠**: 动态住宅代理（自动IP轮换）、请求重试、错误处理
+- ⚡ **HTTP优先**: 列表页与详情页默认通过HTTP直连获取 `__NEXT_DATA__`，速度更快、成本更低，并可选配ZenRows穿透防护
 - 🌐 **多种浏览器**:
   - **Undetected Chrome** - 增强反检测能力，绕过 Cloudflare（推荐）
   - Bright Data Scraping Browser - 云端浏览器服务
@@ -186,7 +187,7 @@ BROWSER_HEADLESS=true
 BROWSER_DISABLE_IMAGES=true
 ```
 
-#### 🌐 Remote Browser（Bright Data）
+#### 🌐 Remote Browser（Bright Data, Pyppeteer）
 - **适用场景**:
   - 需要云端浏览器服务
   - 自动验证码解决
@@ -194,8 +195,10 @@ BROWSER_DISABLE_IMAGES=true
 - **配置**:
 ```bash
 BROWSER_TYPE=remote
-BROWSER_AUTH=brd-customer-xxx-zone-scraping_browser1:password
+REMOTE_BROWSER_WS_ENDPOINT=wss://server:9222/devtools/browser/<browser-id>
 ```
+
+> 仍需使用 Playwright 版本？将 `BROWSER_TYPE` 设为 `remote_playwright` 即可继续使用旧实现。
 
 #### 🔧 Local Browser（测试）
 - **适用场景**:
@@ -209,7 +212,7 @@ BROWSER_HEADLESS=false
 
 #### 浏览器对比
 
-| 特性 | Undetected (虚拟显示) | Undetected (无头) | Remote | Local |
+| 特性 | Undetected (虚拟显示) | Undetected (无头) | Remote (Pyppeteer) | Local |
 |-----|---------------------|-----------------|--------|-------|
 | 反检测能力 | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐ | ⭐⭐⭐⭐ | ⭐⭐ |
 | 5秒盾绕过 | ✅ | ❌ | ✅ | ❌ |
@@ -226,6 +229,56 @@ BROWSER_HEADLESS=false
 > - **无服务器/云函数**: `remote` - 云端托管
 
 详细使用指南: [Undetected Chrome 使用文档](docs/UNDETECTED_CHROME_USAGE.md)
+
+### 4. HTTP 爬虫模式（默认）
+
+`propertyguru-crawler` 现已默认使用 HTTP 管道完成 **列表页 + 详情页** 爬取：
+
+1. 列表页：通过 `ListingHttpCrawler` 请求原始 HTML，提取 `__NEXT_DATA__` 并解析房源卡片。
+2. 详情页：`DetailHttpCrawler` 直接抓取详情页 HTML，将 `__NEXT_DATA__` 交给 `DetailJsonParser` 生成结构化 `PropertyDetails` 数据。
+3. 浏览器：仅在 HTTP 失败或检测到特殊字段缺失时兜底，最大化降低资源成本。
+
+#### 必备环境变量
+
+```bash
+# 启用HTTP流
+USE_HTTP_CRAWLER=true              # 列表页 HTTP
+USE_HTTP_DETAIL_CRAWLER=true       # 详情页 HTTP（建议与上面一同开启）
+
+# 可选：ZenRows 代理，提升绕盾能力
+USE_ZENROWS=true                   # 列表/详情共用开关
+DETAIL_USE_ZENROWS=true            # 详情页单独开关（缺省继承 USE_ZENROWS）
+ZENROWS_APIKEY=your_zenrows_api_key
+ZENROWS_DETAIL_APIKEY=your_detail_only_key  # 可选，若与列表不同
+```
+
+> 📌 **提示**：如果未设置 `ZENROWS_DETAIL_APIKEY`，系统会自动回退使用 `ZENROWS_APIKEY`。关闭 ZenRows 时照常使用自建代理池。
+
+#### 运行建议
+
+- **查询密集型任务**：建议 `USE_HTTP_DETAIL_CRAWLER=true`，大部分房源会直接命中 HTTP 流程，吞吐可提升 3–5 倍。
+- **高风险页面**：可同时保留浏览器配置，确保 `USE_HTTP_DETAIL_CRAWLER` 失败时仍有兜底能力。
+- **调试**：临时禁用 HTTP（设为 `false`）即可回到纯浏览器模式，方便对比抓取结果。
+
+#### HTTP 供应商抽象
+
+HTTP 模块现在支持多家供应商（供应商实现定义在 `crawler/http/providers.py`）：
+
+| 名称 | 描述 | 需要的环境变量 |
+|------|------|----------------|
+| `direct` | 直连目标站点，无需外部服务 | 无 |
+| `zenrows` | ZenRows 代理，维持现有设置 | `ZENROWS_APIKEY` |
+| `scraperapi` | ScraperAPI 代理 | `SCRAPERAPI_KEY` |
+| `oxylabs` | Oxylabs Realtime 代理 | `OXYLABS_USERNAME`, `OXYLABS_PASSWORD` |
+
+通过 `HTTP_PROVIDER` 选择当前生效的供应商（默认 `direct`）。如果需要额外参数，可以在 `env` 中设置对应的逻辑变量，并在 `crawler/pages` 实例化 `HttpClient` 时通过 `provider_options` 细化。
+
+```bash
+HTTP_PROVIDER=zenrows
+ZENROWS_APIKEY=your_zenrows_api_key
+```
+
+需要脱离 ZenRows 时只需把 `USE_HTTP_CRAWLER` 设为 `true`，然后把 `HTTP_PROVIDER=direct` 或 `HTTP_PROVIDER=scraperapi` （并填 API key）即可。
 
 ### 4. 编写爬虫
 

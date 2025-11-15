@@ -34,8 +34,9 @@ if TYPE_CHECKING:
     from ..pages.base import PageCrawler
 
 # Import new HTTP-based crawling modules
+from ..pages.detail_http import DetailHttpCrawler
 from ..pages.factory import PageCrawlerFactory
-from ..parsers import DetailPageParser, ListingPageParser
+from ..parsers import DetailJsonParser, DetailPageParser, ListingPageParser
 from ..storage import StorageManagerProtocol, create_storage_manager
 from ..storage.media_processor import MediaProcessor
 from ..utils.progress_manager import CrawlProgress
@@ -69,6 +70,8 @@ class PropertyGuruCrawler:
 
         # HTTP-based listing page crawler (optional)
         self.listing_http_crawler: PageCrawler | None = None
+        self.detail_http_crawler: DetailHttpCrawler | None = None
+        self.use_http_detail_crawler: bool = False
 
         # 爬虫配置
         crawler_config = self.config.get_section("crawler")
@@ -233,6 +236,7 @@ class PropertyGuruCrawler:
         self._init_watermark_remover(proxy_manager, direct_proxy_url)
         self._init_media_processor(proxy_manager, direct_proxy_url)
         self._init_http_crawler()
+        self._init_detail_http_crawler()
         logger.info("PropertyGuru爬虫初始化完成")
 
     def _init_http_crawler(self):
@@ -246,11 +250,76 @@ class PropertyGuruCrawler:
         except Exception as e:
             logger.warning(f"HTTP列表页爬虫初始化失败: {e}")
 
+    def _init_detail_http_crawler(self):
+        """初始化HTTP详情页爬虫（可选）"""
+        use_http_detail = os.getenv("USE_HTTP_DETAIL_CRAWLER", "false").lower() == "true"
+        self.use_http_detail_crawler = use_http_detail
+        if not use_http_detail:
+            return
+        try:
+            self.detail_http_crawler = DetailHttpCrawler()
+            logger.info("HTTP详情页爬虫已初始化")
+        except Exception as exc:
+            self.detail_http_crawler = None
+            self.use_http_detail_crawler = False
+            logger.warning(f"HTTP详情页爬虫初始化失败: {exc}")
+
+    def _crawl_detail_page_http(self, detail_url: str) -> dict | None:
+        """通过HTTP获取详情数据，返回与浏览器流程一致的结构"""
+        if not self.detail_http_crawler:
+            return None
+
+        logger.debug(f"使用HTTP方式爬取详情页: {detail_url}")
+        next_data = self.detail_http_crawler.fetch_next_data(detail_url)
+        parser = DetailJsonParser(next_data)
+        parsed = parser.parse_all()
+        property_details = parsed.get("property_details")
+
+        if not property_details:
+            logger.warning("HTTP详情页解析缺少PropertyDetails: %s", detail_url)
+            return None
+
+        amenities = parsed.get("amenities") or []
+        facilities = parsed.get("facilities") or []
+        media_urls = parsed.get("media_urls") or []
+
+        # 确保PropertyDetails对象同步amenities/facilities
+        property_details.amenities = amenities if amenities else property_details.amenities
+        property_details.facilities = (
+            facilities if facilities else property_details.facilities
+        )
+
+        return {
+            "property_details": property_details,
+            "amenities": amenities,
+            "facilities": facilities,
+            "media_urls": media_urls,
+        }
+
     def connect_browser(self):
         """连接浏览器"""
         if not self.browser:
             raise RuntimeError("浏览器未初始化")
         self.browser.connect()
+
+    async def connect_browser_async(self):
+        """
+        异步连接浏览器的兼容方法：
+        - 如果浏览器驱动提供异步接口（connect_async），则 await 其完成；
+        - 否则将同步 connect 放到线程池中执行以避免阻塞事件循环。
+        """
+        if not self.browser:
+            raise RuntimeError("浏览器未初始化")
+
+        # 优先使用浏览器对象自身的异步方法
+        if hasattr(self.browser, "connect_async"):
+            await self.browser.connect_async()
+            return
+
+        # 否则在事件循环中通过线程执行同步 connect
+        import asyncio
+
+        await asyncio.to_thread(self.browser.connect)
 
     def _safe_navigate(self, url: str, max_retries: int = 2) -> None:
         """
@@ -316,6 +385,18 @@ class PropertyGuruCrawler:
         Returns:
             最大页数
         """
+        # 优先使用 HTTP 列表页爬虫直接解析 __NEXT_DATA__
+        if self.listing_http_crawler:
+            try:
+                logger.debug("尝试通过HTTP爬虫解析最大页数")
+                http_max_pages = self.listing_http_crawler.get_max_pages()
+                if http_max_pages:
+                    logger.info("HTTP爬虫解析到最大页数: %s", http_max_pages)
+                    return http_max_pages
+                logger.warning("HTTP爬虫未能解析最大页数，回退到浏览器方案")
+            except Exception as exc:
+                logger.warning("HTTP爬虫解析最大页数失败，将回退到浏览器: %s", exc)
+
         for attempt in range(max_retries):
             try:
                 if not self.browser:
@@ -512,6 +593,18 @@ class PropertyGuruCrawler:
         Returns:
             详情数据字典，包含所有提取的信息
         """
+        if self.use_http_detail_crawler and self.detail_http_crawler:
+            try:
+                http_result = self._crawl_detail_page_http(detail_url)
+                if http_result:
+                    logger.debug("HTTP详情页解析成功，跳过浏览器流程")
+                    return http_result
+                logger.debug("HTTP详情页解析返回空结果，准备回退浏览器: %s", detail_url)
+            except Exception as http_error:
+                logger.warning(
+                    "HTTP详情页解析失败，将回退浏览器: %s", http_error, exc_info=True
+                )
+
         try:
             if not self.browser:
                 raise RuntimeError("浏览器未初始化")
@@ -818,7 +911,7 @@ class PropertyGuruCrawler:
                 logger.info(f"测试爬取第一个房源: {first_listing.listing_id} - {first_listing.title}")
 
                 # 连接浏览器以爬取详情页（detail pages通常需要JavaScript）
-                self.connect_browser()
+                await self.connect_browser_async()
 
                 success = await self.crawl_listing(first_listing)
 
@@ -834,7 +927,7 @@ class PropertyGuruCrawler:
             else:
                 # 回退到原有浏览器方式
                 # 连接浏览器
-                self.connect_browser()
+                await self.connect_browser_async()
 
                 logger.info("获取第一页列表...")
                 # 只解析第一个卡片，而不是解析所有卡片
@@ -1002,7 +1095,7 @@ class PropertyGuruCrawler:
             end_page: 结束页码（None表示爬取所有页）
         """
         try:
-            self.connect_browser()
+            await self.connect_browser_async()
 
             start_page = self._adjust_start_page_for_resume(start_page)
 
@@ -1144,7 +1237,7 @@ class PropertyGuruCrawler:
                 start_time = time.time()
                 self.progress.start_session()
 
-                self.connect_browser()
+                await self.connect_browser_async()
 
                 # 从第一页开始
                 start_page = 1

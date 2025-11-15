@@ -4,6 +4,7 @@ from .base import Browser
 from .browser import (
     BrowserFactory,
     LocalBrowser,
+    PyppeteerBrowserNew,
     RemoteBrowser,
     UndetectedBrowser,
     configure_performance_options,
@@ -15,6 +16,7 @@ __all__ = [
     "BrowserFactory",
     "LocalBrowser",
     "RemoteBrowser",
+    "PyppeteerBrowserNew",
     "UndetectedBrowser",
     "configure_performance_options",
     "setup_media_blocking_cdp",

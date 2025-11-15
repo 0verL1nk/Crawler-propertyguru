@@ -5,7 +5,10 @@ HTTP基础的列表页爬虫实现
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+import json
+from typing import TYPE_CHECKING, Any
+
+from bs4 import BeautifulSoup
 
 from crawler.http.client import HttpClient
 from crawler.pages.base import PageCrawler
@@ -23,7 +26,7 @@ class ListingHttpCrawler(PageCrawler):
 
     BASE_URL = "https://www.propertyguru.com.sg/property-for-sale"
 
-    def __init__(self, use_zenrows: bool = False, zenrows_apikey: str | None = None):
+    def __init__(self):
         """
         初始化HTTP列表页爬虫
 
@@ -31,7 +34,7 @@ class ListingHttpCrawler(PageCrawler):
             use_zenrows: 是否使用ZenRows服务
             zenrows_apikey: ZenRows API密钥
         """
-        self.http_client = HttpClient(use_zenrows=use_zenrows, zenrows_apikey=zenrows_apikey)
+        self.http_client = HttpClient()
         self.enable_geocoding = False
 
     async def get_page_content(self, url: str) -> str:
@@ -123,16 +126,62 @@ class ListingHttpCrawler(PageCrawler):
             return []
 
     def get_max_pages(self) -> int | None:
-        """
-        获取最大页数（同步）
+        """获取最大页数（同步）"""
+        url = self.BASE_URL
+        logger.debug("获取列表页最大页数: %s", url)
 
-        Returns:
-            最大页数
-        """
-        # 对于HTTP爬取，我们可以先尝试获取第一页来确定最大页数
-        # 但这需要JavaScript渲染来获取分页信息，所以我们仍然需要浏览器
-        # 这里简单返回None，表示需要使用浏览器获取
+        try:
+            html_content = self.get_page_content_sync(url)
+            total_pages = self._extract_total_pages_from_html(html_content)
 
-        # 或者我们可以实现一个简化版本，假设至少有100页
-        logger.warning("HTTP爬虫无法准确获取最大页数，需要浏览器支持")
-        return None
+            if total_pages is None:
+                logger.warning("未能从列表页解析出最大页数")
+            else:
+                logger.info("解析到最大页数: %s", total_pages)
+
+            return total_pages
+        except Exception as exc:  # pragma: no cover - 网络异常日志即可
+            logger.error("获取列表页最大页数失败: %s", exc)
+            return None
+
+    @staticmethod
+    def _extract_total_pages_from_html(html_content: str) -> int | None:
+        """从 __NEXT_DATA__ JSON 中解析 paginationData.totalPages"""
+        if not html_content:
+            return None
+
+        soup = BeautifulSoup(html_content, "lxml")
+        script_tag = soup.find("script", id="__NEXT_DATA__", type="application/json")
+        if not script_tag or not script_tag.string:
+            logger.debug("列表页未找到 __NEXT_DATA__ 脚本")
+            return None
+
+        try:
+            data: dict[str, Any] = json.loads(script_tag.string)
+        except json.JSONDecodeError as exc:
+            logger.debug("解析 __NEXT_DATA__ JSON 失败: %s", exc)
+            return None
+
+        pagination_data = (
+            data.get("props", {})
+            .get("pageProps", {})
+            .get("pageData", {})
+            .get("data", {})
+            .get("paginationData", {})
+        )
+
+        total_pages = pagination_data.get("totalPages") if isinstance(pagination_data, dict) else None
+        if total_pages is None:
+            return None
+
+        try:
+            total_pages_int = int(total_pages)
+        except (TypeError, ValueError):
+            logger.debug("paginationData.totalPages 非数字: %s", total_pages)
+            return None
+
+        if total_pages_int <= 0:
+            logger.debug("paginationData.totalPages 非正整数: %s", total_pages_int)
+            return None
+
+        return total_pages_int

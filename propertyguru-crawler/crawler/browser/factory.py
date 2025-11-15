@@ -10,7 +10,16 @@ from typing import TYPE_CHECKING
 
 from .drivers.local import LocalBrowser
 from .drivers.remote import RemoteBrowser
+from .drivers.remote_new import PyppeteerBrowserNew
 from .drivers.undetected import UndetectedBrowser
+
+# 尝试导入Puppeteer远程浏览器
+try:
+    from .drivers.puppeteer_remote import PuppeteerRemoteBrowser
+    PUPPETEER_AVAILABLE = True
+except ImportError:
+    PuppeteerRemoteBrowser = None
+    PUPPETEER_AVAILABLE = False
 
 if TYPE_CHECKING:
     from .base import Browser
@@ -25,7 +34,7 @@ class BrowserFactory:
         创建浏览器爬虫实例
 
         Args:
-            browser_type: 浏览器类型 ('undetected', 'local', 'remote')
+            browser_type: 浏览器类型 ('undetected', 'local', 'remote', 'puppeteer')
                          如果为 None，从环境变量 BROWSER_TYPE 读取
             **kwargs: 传递给浏览器构造函数的参数
 
@@ -76,8 +85,13 @@ class BrowserFactory:
                 page_load_strategy=page_load_strategy,
             )
 
-        else:
-            # 使用远程浏览器（WebSocket/CDP）
+        elif browser_type == "puppeteer":
+            # 使用旧版Puppeteer远程浏览器
+            if not PUPPETEER_AVAILABLE:
+                raise ImportError(
+                    "无法导入 Puppeteer 远程浏览器。请安装: pip install pyppeteer"
+                )
+
             browser_ws_endpoint = kwargs.get("browser_ws_endpoint") or os.getenv("REMOTE_BROWSER_WS_ENDPOINT")
             if not browser_ws_endpoint:
                 raise ValueError(
@@ -90,8 +104,54 @@ class BrowserFactory:
             disable_images = kwargs.get("disable_images", os.getenv("BROWSER_DISABLE_IMAGES", "true").lower() == "true")
             browser_type_param = kwargs.get("browser_type", "chrome")
 
+            return PuppeteerRemoteBrowser(
+                browser_ws_endpoint=browser_ws_endpoint,
+                disable_images=disable_images,
+                browser_type=browser_type_param,
+            )
+
+        elif browser_type in {"remote_playwright", "playwright"}:
+            # 保留对旧版 Playwright 驱动的支持
+            browser_ws_endpoint = kwargs.get("browser_ws_endpoint") or os.getenv("REMOTE_BROWSER_WS_ENDPOINT")
+            if not browser_ws_endpoint:
+                raise ValueError(
+                    "未配置REMOTE_BROWSER_WS_ENDPOINT环境变量\n"
+                    "提示：\n"
+                    "  - 使用远程浏览器：配置 REMOTE_BROWSER_WS_ENDPOINT\n"
+                    "  - 格式: REMOTE_BROWSER_WS_ENDPOINT=wss://server:9222/devtools/browser/id"
+                )
+
+            disable_images = kwargs.get("disable_images", os.getenv("BROWSER_DISABLE_IMAGES", "true").lower() == "true")
+            browser_type_param = kwargs.get("browser_type", "chrome")
+            use_async = kwargs.get("use_async", False)
+
             return RemoteBrowser(
                 browser_ws_endpoint=browser_ws_endpoint,
                 disable_images=disable_images,
                 browser_type=browser_type_param,
+                use_async=use_async,
+            )
+
+        elif browser_type in {"remote", "remote_new", "pyppeteer"}:
+            browser_ws_endpoint = kwargs.get("browser_ws_endpoint") or os.getenv("REMOTE_BROWSER_WS_ENDPOINT")
+            if not browser_ws_endpoint:
+                raise ValueError(
+                    "未配置REMOTE_BROWSER_WS_ENDPOINT环境变量\n"
+                    "提示：\n"
+                    "  - 使用远程浏览器：配置 REMOTE_BROWSER_WS_ENDPOINT\n"
+                    "  - 格式: REMOTE_BROWSER_WS_ENDPOINT=wss://server:9222/devtools/browser/id"
+                )
+
+            disable_images = kwargs.get("disable_images", os.getenv("BROWSER_DISABLE_IMAGES", "true").lower() == "true")
+            browser_type_param = kwargs.get("browser_type", "chrome")
+
+            return PyppeteerBrowserNew(
+                browser_ws_endpoint=browser_ws_endpoint,
+                disable_images=disable_images,
+                browser_type=browser_type_param,
+            )
+
+        else:
+            raise ValueError(
+                f"不支持的浏览器类型: {browser_type}. 可选: undetected/local/remote/remote_playwright/puppeteer"
             )
