@@ -229,6 +229,12 @@ func (s *SearchService) mergeFilters(explicit *model.SearchFilters, slots *model
 		if merged.Bathrooms == nil && slots.Bathrooms != nil {
 			merged.Bathrooms = slots.Bathrooms
 		}
+		if merged.AreaSqftMin == nil && slots.AreaSqftMin != nil {
+			merged.AreaSqftMin = slots.AreaSqftMin
+		}
+		if merged.AreaSqftMax == nil && slots.AreaSqftMax != nil {
+			merged.AreaSqftMax = slots.AreaSqftMax
+		}
 		if merged.UnitType == nil && slots.UnitType != nil {
 			merged.UnitType = slots.UnitType
 		}
@@ -237,6 +243,12 @@ func (s *SearchService) mergeFilters(explicit *model.SearchFilters, slots *model
 		}
 		if merged.Location == nil && slots.Location != nil {
 			merged.Location = slots.Location
+		}
+		if len(merged.Amenities) == 0 && len(slots.Amenities) > 0 {
+			merged.Amenities = slots.Amenities
+		}
+		if len(merged.Facilities) == 0 && len(slots.Facilities) > 0 {
+			merged.Facilities = slots.Facilities
 		}
 	}
 

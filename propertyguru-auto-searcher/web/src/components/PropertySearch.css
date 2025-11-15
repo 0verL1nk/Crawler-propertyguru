@@ -70,34 +70,154 @@
   box-shadow: var(--semi-shadow-elevated);
 }
 
-/* 响应式设计 - 在小屏幕上切换为垂直布局 */
+/* 响应式设计 - 平板和小屏幕适配 */
+@media (max-width: 1200px) {
+  .content-wrapper > div {
+    gap: 16px;
+    padding: 16px;
+  }
+  
+  .properties-results-container {
+    flex: 1.5;
+  }
+}
+
 @media (max-width: 1024px) {
   .header {
     padding: 16px;
   }
 
-  .content-wrapper > div:first-child {
+  .content-wrapper > div {
     flex-direction: column !important;
-  }
-
-  .content-wrapper > div:first-child > div {
-    width: 100% !important;
+    padding: 12px;
+    gap: 12px;
   }
 
   .properties-results-container,
   .ai-chat-section {
+    flex: 1 !important;
     width: 100% !important;
+    min-height: 300px;
+  }
+  
+  /* 在平板上，左侧结果区域占更多空间 */
+  .properties-results-container {
+    max-height: 50vh;
+    overflow-y: auto;
   }
 }
 
+/* 移动端优化 */
 @media (max-width: 768px) {
-  .header {
-    padding: 16px;
+  .property-search-container {
+    font-size: 14px;
   }
 
-  .content-wrapper > div:first-child {
+  .header {
+    padding: 12px;
+  }
+  
+  .header h2 {
+    font-size: 20px !important;
+  }
+  
+  .header .semi-typography {
+    font-size: 13px !important;
+  }
+
+  .content-wrapper > div {
+    padding: 8px;
+    gap: 8px;
+  }
+  
+  /* 移动端上，对话区占主要位置 */
+  .ai-chat-section {
+    flex: 2 !important;
+    min-height: 400px;
+  }
+  
+  .properties-results-container {
+    flex: 1 !important;
+    max-height: 40vh;
+  }
+  
+  /* 卡片内边距优化 */
+  .property-card .semi-card-body {
+    padding: 12px !important;
+  }
+  
+  /* 按钮和输入框触摸优化 */
+  .semi-button {
+    min-height: 44px;
+    touch-action: manipulation;
+  }
+  
+  .semi-input,
+  .semi-input-textarea {
+    min-height: 44px;
+    font-size: 16px !important; /* 防止iOS自动缩放 */
+  }
+  
+  /* Chat输入框优化 */
+  .semi-chat-input-area textarea {
+    font-size: 16px !important;
+    min-height: 44px;
+  }
+}
+
+/* 小屏手机优化 */
+@media (max-width: 480px) {
+  .property-search-container {
+    font-size: 13px;
+  }
+  
+  .header {
     padding: 10px;
-    gap: 10px;
+  }
+  
+  .header h2 {
+    font-size: 18px !important;
+  }
+  
+  .header .semi-typography {
+    font-size: 12px !important;
+  }
+  
+  .content-wrapper > div {
+    padding: 6px;
+    gap: 6px;
+  }
+  
+  /* 卡片更紧凑 */
+  .property-card {
+    margin-bottom: 8px !important;
+  }
+  
+  .property-card .semi-card-body {
+    padding: 10px !important;
+  }
+  
+  /* 标题和标签在小屏幕上堆叠 */
+  .property-card .semi-card-header-wrapper,
+  .property-card > div > div:first-child {
+    flex-wrap: wrap !important;
+    gap: 8px !important;
+  }
+  
+  .property-card h5 {
+    font-size: 14px !important;
+    line-height: 1.4 !important;
+  }
+  
+  /* 网格列数调整 */
+  .semi-col-8 {
+    flex: 0 0 100% !important;
+    max-width: 100% !important;
+  }
+  
+  /* 描述列表响应式 */
+  .semi-descriptions-item {
+    min-width: 50% !important;
   }
 }
 

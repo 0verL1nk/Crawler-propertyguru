@@ -1389,6 +1389,12 @@ class PropertyGuruCrawler:
                 elapsed_time = time.time() - start_time
                 self.progress.end_session(success_count, elapsed_time)
 
+                # 清理一个月前的旧数据
+                if self.db_ops:
+                    deleted_count = self.db_ops.cleanup_old_listings(days_old=30)
+                    if deleted_count > 0:
+                        logger.info(f"已清理 {deleted_count} 条超过30天的旧数据")
+
                 logger.info("=" * 60)
                 logger.info("本次更新完成")
                 logger.info(

@@ -425,18 +425,28 @@ Extract the following information if present:
 - price_max: maximum price in SGD (number)
 - bedrooms: number of bedrooms (integer)
 - bathrooms: number of bathrooms (integer)
+- area_sqft_min: minimum area in square feet (number)
+- area_sqft_max: maximum area in square feet (number)
 - unit_type: property type - must be one of: "HDB", "Condo", "Landed", "Executive" (string)
 - location: Singapore district or area name (string)
 - mrt_distance_max: maximum walking time to MRT station in minutes (integer, default 15 if "near MRT" mentioned)
 - build_year_min: minimum build year (integer)
+- amenities: array of required amenities/features (e.g., ["Air conditioner", "Balcony", "Washer/dryer"])
+- facilities: array of required facilities (e.g., ["Swimming pool", "Gym", "BBQ pits", "Playground"])
 - keywords: array of important keywords for semantic search (e.g., "spacious", "view", "renovated", "quiet")
+
+Common amenities: Air conditioner, Balcony, Built-in wardrobe, Curtains, Fridge, Washer/dryer, Water heater, Dining table, Bed frame, Study table
+Common facilities: Swimming pool, Gym, Tennis court, BBQ pits, Playground, Function room, 24-hour security, Covered parking
 
 Important rules:
 - All property data is in English
 - Respond ONLY with valid JSON
 - If a field is not mentioned, omit it
 - For prices: "1.5M" = 1500000, "800K" = 800000
+- For areas: "1000 sqft" = 1000, "1200 square feet" = 1200
 - Common terms: "bright" (natural light), "spacious" (large area), "view" (good scenery)
+- When user mentions facilities like "pool", "gym", "tennis", add them to facilities array
+- When user mentions appliances/features like "aircon", "balcony", add them to amenities array
 
 Examples:
 Query: "3 bedroom condo in Punggol under 1.5M"
@@ -444,6 +454,15 @@ Response: {"bedrooms": 3, "unit_type": "Condo", "location": "Punggol", "price_ma
 
 Query: "HDB near MRT with good view and spacious layout"
 Response: {"unit_type": "HDB", "mrt_distance_max": 15, "keywords": ["view", "spacious", "near mrt", "hdb"]}
+
+Query: "Condo with swimming pool and gym, 2 bedrooms, at least 1000 sqft"
+Response: {"bedrooms": 2, "unit_type": "Condo", "area_sqft_min": 1000, "facilities": ["Swimming pool", "Gym"], "keywords": ["condo", "pool", "gym"]}
+
+Query: "Apartment with balcony and air conditioning, fully furnished, 800-1200 sqft"
+Response: {"area_sqft_min": 800, "area_sqft_max": 1200, "amenities": ["Balcony", "Air conditioner"], "keywords": ["furnished", "balcony", "aircon"]}
+
+Query: "Large 4-bedroom landed house, minimum 2500 sqft"
+Response: {"bedrooms": 4, "unit_type": "Landed", "area_sqft_min": 2500, "keywords": ["large", "landed", "house"]}
 
 Query: "Landed property in Bukit Timah, 4 bed 3 bath, modern"
 Response: {"unit_type": "Landed", "location": "Bukit Timah", "bedrooms": 4, "bathrooms": 3, "keywords": ["modern", "landed", "bukit timah"]}
@@ -538,10 +557,14 @@ Extract the following information if present:
 - price_max: maximum price in SGD (number)
 - bedrooms: number of bedrooms (integer)
 - bathrooms: number of bathrooms (integer)
+- area_sqft_min: minimum area in square feet (number)
+- area_sqft_max: maximum area in square feet (number)
 - unit_type: property type - must be one of: "HDB", "Condo", "Landed", "Executive" (string)
 - location: Singapore district or area name (string)
 - mrt_distance_max: maximum walking time to MRT station in minutes (integer, default 15 if "near MRT" mentioned)
 - build_year_min: minimum build year (integer)
+- amenities: array of required amenities/features (e.g., ["Air conditioner", "Balcony"])
+- facilities: array of required facilities (e.g., ["Swimming pool", "Gym"])
 - keywords: array of important keywords for semantic search
 
 Important rules:
@@ -549,10 +572,14 @@ Important rules:
 - Respond ONLY with valid JSON
 - If a field is not mentioned, omit it
 - For prices: "1.5M" = 1500000, "800K" = 800000
+- For areas: "1000 sqft" = 1000, "1200 square feet" = 1200
 
 Examples:
 Query: "3 bedroom condo under 1.5M"
 Response: {"bedrooms": 3, "unit_type": "Condo", "price_max": 1500000, "keywords": ["condo"]}
+
+Query: "2 bed with pool and gym, at least 1000 sqft"
+Response: {"bedrooms": 2, "area_sqft_min": 1000, "facilities": ["Swimming pool", "Gym"], "keywords": ["pool", "gym"]}
 
 Now parse the following query into JSON format:`
 

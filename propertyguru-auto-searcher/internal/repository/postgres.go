@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"core/internal/model"
+	"core/internal/utils"
 
 	"github.com/jmoiron/sqlx"
 	_ "github.com/lib/pq"
@@ -87,6 +88,16 @@ func (r *PostgresRepository) SearchWithFilters(
 			args = append(args, *filters.Bathrooms)
 			argIndex++
 		}
+		if filters.AreaSqftMin != nil {
+			whereClauses = append(whereClauses, fmt.Sprintf("area_sqft >= $%d", argIndex))
+			args = append(args, *filters.AreaSqftMin)
+			argIndex++
+		}
+		if filters.AreaSqftMax != nil {
+			whereClauses = append(whereClauses, fmt.Sprintf("area_sqft <= $%d", argIndex))
+			args = append(args, *filters.AreaSqftMax)
+			argIndex++
+		}
 		if filters.UnitType != nil {
 			whereClauses = append(whereClauses, fmt.Sprintf("unit_type ILIKE $%d", argIndex))
 			args = append(args, "%"+*filters.UnitType+"%")
@@ -101,6 +112,20 @@ func (r *PostgresRepository) SearchWithFilters(
 			whereClauses = append(whereClauses, fmt.Sprintf("location ILIKE $%d", argIndex))
 			args = append(args, "%"+*filters.Location+"%")
 			argIndex++
+		}
+		// JSONB amenities filtering - fuzzy matching with common aliases
+		if len(filters.Amenities) > 0 {
+			amenityConds, amenityParams, newIndex := utils.BuildFuzzyAmenityQuery(filters.Amenities, argIndex)
+			whereClauses = append(whereClauses, amenityConds...)
+			args = append(args, amenityParams...)
+			argIndex = newIndex
+		}
+		// JSONB facilities filtering - fuzzy matching with common aliases
+		if len(filters.Facilities) > 0 {
+			facilityConds, facilityParams, newIndex := utils.BuildFuzzyFacilityQuery(filters.Facilities, argIndex)
+			whereClauses = append(whereClauses, facilityConds...)
+			args = append(args, facilityParams...)
+			argIndex = newIndex
 		}
 	}
 

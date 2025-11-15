@@ -75,10 +75,14 @@ func (p *IntentParser) parseWithAI(query string) (*model.IntentResult, error) {
 	result.Slots.PriceMax = aiResult.PriceMax
 	result.Slots.Bedrooms = aiResult.Bedrooms
 	result.Slots.Bathrooms = aiResult.Bathrooms
+	result.Slots.AreaSqftMin = aiResult.AreaSqftMin
+	result.Slots.AreaSqftMax = aiResult.AreaSqftMax
 	result.Slots.UnitType = aiResult.UnitType
 	result.Slots.Location = aiResult.Location
 	result.Slots.MRTDistanceMax = aiResult.MRTDistanceMax
 	result.Slots.BuildYearMin = aiResult.BuildYearMin
+	result.Slots.Amenities = aiResult.Amenities
+	result.Slots.Facilities = aiResult.Facilities
 
 	// Add AI-extracted keywords
 	if len(aiResult.Keywords) > 0 {
@@ -162,10 +166,14 @@ func (p *IntentParser) parseWithAIStream(ctx context.Context, query string, call
 	result.Slots.PriceMax = aiResult.PriceMax
 	result.Slots.Bedrooms = aiResult.Bedrooms
 	result.Slots.Bathrooms = aiResult.Bathrooms
+	result.Slots.AreaSqftMin = aiResult.AreaSqftMin
+	result.Slots.AreaSqftMax = aiResult.AreaSqftMax
 	result.Slots.UnitType = aiResult.UnitType
 	result.Slots.Location = aiResult.Location
 	result.Slots.MRTDistanceMax = aiResult.MRTDistanceMax
 	result.Slots.BuildYearMin = aiResult.BuildYearMin
+	result.Slots.Amenities = aiResult.Amenities
+	result.Slots.Facilities = aiResult.Facilities
 
 	// Add AI-extracted keywords
 	if len(aiResult.Keywords) > 0 {

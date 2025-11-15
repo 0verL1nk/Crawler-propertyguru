@@ -79,7 +79,7 @@ build-backend:
 	@cp -r web/dist/* cmd/server/web/dist/
 	@GOOS=$(GOOS) GOARCH=$(GOARCH) go build $(LDFLAGS) -tags embed \
 		-o $(BUILD_DIR)/$(APP_NAME) ./cmd/server
-	@rm -rf cmd/server/web
+	@rm -rf cmd/server/webw
 	@echo "✅ Backend build completed"
 
 ## install: 安装前端依赖

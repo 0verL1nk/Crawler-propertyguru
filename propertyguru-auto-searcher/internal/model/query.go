@@ -13,10 +13,14 @@ type SearchFilters struct {
 	PriceMax       *float64 `json:"price_max,omitempty"`
 	Bedrooms       *int     `json:"bedrooms,omitempty"`
 	Bathrooms      *int     `json:"bathrooms,omitempty"`
+	AreaSqftMin    *float64 `json:"area_sqft_min,omitempty"`  // 最小面积
+	AreaSqftMax    *float64 `json:"area_sqft_max,omitempty"`  // 最大面积
 	UnitType       *string  `json:"unit_type,omitempty"`
 	MRTDistanceMax *int     `json:"mrt_distance_max,omitempty"`
 	Location       *string  `json:"location,omitempty"`
 	IsCompleted    *bool    `json:"is_completed,omitempty"`
+	Amenities      []string `json:"amenities,omitempty"`  // 必须包含的设施
+	Facilities     []string `json:"facilities,omitempty"` // 必须包含的公共设施
 }
 
 // SearchOptions represents search options

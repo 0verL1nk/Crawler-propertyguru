@@ -44,10 +44,14 @@ type AIIntentResponse struct {
 	PriceMax        *float64 `json:"price_max,omitempty"`
 	Bedrooms        *int     `json:"bedrooms,omitempty"`
 	Bathrooms       *int     `json:"bathrooms,omitempty"`
+	AreaSqftMin     *float64 `json:"area_sqft_min,omitempty"`    // 最小面积（平方英尺）
+	AreaSqftMax     *float64 `json:"area_sqft_max,omitempty"`    // 最大面积（平方英尺）
 	UnitType        *string  `json:"unit_type,omitempty"`
 	Location        *string  `json:"location,omitempty"`
 	MRTDistanceMax  *int     `json:"mrt_distance_max,omitempty"`
 	BuildYearMin    *int     `json:"build_year_min,omitempty"`
+	Amenities       []string `json:"amenities,omitempty"`        // 房源设施需求
+	Facilities      []string `json:"facilities,omitempty"`       // 公共设施需求
 	Keywords        []string `json:"keywords,omitempty"`
 	Confidence      float64  `json:"confidence,omitempty"`
 	ThinkingProcess string   `json:"thinking_process,omitempty"` // Full thinking process

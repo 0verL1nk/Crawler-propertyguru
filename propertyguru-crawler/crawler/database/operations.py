@@ -516,3 +516,61 @@ class DBOperations:
         except Exception as e:
             logger.error(f"统计已完成房源数量失败: {e}")
             return 0
+
+    def cleanup_old_listings(self, days_old: int = 30) -> int:
+        """
+        清理指定天数之前的已完成房源数据
+
+        Args:
+            days_old: 删除多少天之前的数据，默认30天
+
+        Returns:
+            删除的记录数量
+        """
+        try:
+            from datetime import datetime, timedelta
+            from sqlalchemy import delete
+
+            # 计算截止日期
+            cutoff_date = datetime.now().date() - timedelta(days=days_old)
+
+            deleted_count = 0
+
+            # 删除符合条件的房源记录（已完成且上架日期早于截止日期）
+            with self._get_session() as session:
+                # 先统计要删除的记录数
+                count_stmt = select(func.count(ListingInfoORM.listing_id)).where(
+                    ListingInfoORM.is_completed == True,  # noqa: E712
+                    ListingInfoORM.listed_date < cutoff_date
+                )
+                count = session.scalar(count_stmt) or 0
+
+                if count > 0:
+                    # 删除相关的媒体记录
+                    delete_media_stmt = delete(MediaItemORM).where(
+                        MediaItemORM.listing_id.in_(
+                            select(ListingInfoORM.listing_id).where(
+                                ListingInfoORM.is_completed == True,  # noqa: E712
+                                ListingInfoORM.listed_date < cutoff_date
+                            )
+                        )
+                    )
+                    session.execute(delete_media_stmt)
+
+                    # 删除房源记录
+                    delete_stmt = delete(ListingInfoORM).where(
+                        ListingInfoORM.is_completed == True,  # noqa: E712
+                        ListingInfoORM.listed_date < cutoff_date
+                    )
+                    result = session.execute(delete_stmt)
+                    deleted_count = result.rowcount
+
+                    logger.info(f"已清理 {days_old} 天前的旧数据: {deleted_count} 条房源记录及相关媒体文件")
+                else:
+                    logger.info(f"没有找到 {days_old} 天前需要清理的旧数据")
+
+            return deleted_count
+
+        except Exception as e:
+            logger.error(f"清理旧房源数据失败: {e}")
+            return 0
