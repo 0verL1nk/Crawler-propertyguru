@@ -102,7 +102,8 @@ propertyguru-auto-searcher/
 ## 🌐 API Endpoints
 
 ### Search
-- `POST /api/v1/search` - Standard search
+- `POST /api/v1/search` - Standard search (returns search parameters and metadata)
+- `POST /api/v1/search/results` - Paginated search results
 - `POST /api/v1/search/stream` - Streaming search with SSE
 
 ### Other

@@ -125,9 +125,12 @@ class ListingHttpCrawler(PageCrawler):
             logger.error(f"获取列表页房源IDs失败: {e}")
             return []
 
-    def get_max_pages(self) -> int | None:
+    def get_max_pages(self, base_page: int | None = None) -> int | None:
         """获取最大页数（同步）"""
-        url = self.BASE_URL
+        if base_page and base_page > 1:
+            url = f"{self.BASE_URL}/{base_page}"
+        else:
+            url = self.BASE_URL
         logger.debug("获取列表页最大页数: %s", url)
 
         try:

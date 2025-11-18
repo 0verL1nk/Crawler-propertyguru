@@ -269,6 +269,7 @@ HTTP 模块现在支持多家供应商（供应商实现定义在 `crawler/http/
 | `direct` | 直连目标站点，无需外部服务 | 无 |
 | `zenrows` | ZenRows 代理，维持现有设置 | `ZENROWS_APIKEY` |
 | `scraperapi` | ScraperAPI 代理 | `SCRAPERAPI_KEY` |
+| `scrapingbee` | ScrapingBee 代理，直接返回 HTML | `SCRAPINGBEE_API_KEY` |
 | `oxylabs` | Oxylabs Realtime 代理 | `OXYLABS_USERNAME`, `OXYLABS_PASSWORD` |
 
 通过 `HTTP_PROVIDER` 选择当前生效的供应商（默认 `direct`）。如果需要额外参数，可以在 `env` 中设置对应的逻辑变量，并在 `crawler/pages` 实例化 `HttpClient` 时通过 `provider_options` 细化。
@@ -397,7 +398,12 @@ crawler:
   concurrency: 5
   timeout: 30
   max_retries: 3
+  listing_concurrency: 3  # 详情页并行抓取的最大任务数（仅在使用代理时生效）
+  direct_ip_parallel: false
+  direct_ip_parallel_concurrency: 2
 ```
+
+> ⚠️ `direct_ip_parallel` 默认关闭以避免在无代理时触发目标站限速；若确需开启，请根据带宽和风控情况调低 `direct_ip_parallel_concurrency`。
 
 ## 📖 示例
 

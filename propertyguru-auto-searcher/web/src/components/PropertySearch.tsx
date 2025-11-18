@@ -15,9 +15,12 @@ import {
   Row,
   Col,
   Spin,
+  Pagination,
 } from "@douyinfe/semi-ui";
 import { IconHome, IconMapPin } from "@douyinfe/semi-icons";
 import "./PropertySearch.css";
+
+const DEFAULT_PAGE_SIZE = 10;
 
 const { Title, Text } = Typography;
 
@@ -43,6 +46,19 @@ interface SearchResponse {
   total?: number;
   intent?: any;
   took_ms?: number;
+  page?: number;
+  page_size?: number;
+  total_pages?: number;
+  has_more?: boolean;
+}
+
+interface SearchResultResponse {
+  results?: Property[];
+  took_ms?: number;
+  page?: number;
+  page_size?: number;
+  total_pages?: number;
+  has_more?: boolean;
 }
 
 const PropertySearch: React.FC = () => {
@@ -62,6 +78,14 @@ const PropertySearch: React.FC = () => {
       status: "completed",
     },
   ]);
+  const [pagination, setPagination] = useState({
+    page: 1,
+    pageSize: DEFAULT_PAGE_SIZE,
+    totalPages: 0,
+    hasMore: false,
+  });
+  // const [lastQuery, setLastQuery] = useState<string | null>(null); // Not used anymore since we store parsed filters
+  const [currentFilters, setCurrentFilters] = useState<any>(null);
 
   // 只需要一个标志防止并发
   const isProcessingRef = useRef(false);
@@ -77,7 +101,7 @@ const PropertySearch: React.FC = () => {
     // 提取用户输入
     const message = chatInputToMessage(props);
     let content = "";
-    
+
     if (typeof message.content === "string") {
       content = message.content;
     } else if (Array.isArray(message.content)) {
@@ -118,7 +142,7 @@ const PropertySearch: React.FC = () => {
 
     setMessages((prev) => [...prev, userMessage, aiMessage]);
     setIsSearching(true);
-  // 不清空，等新结果返回后再替换
+    // 不清空，等新结果返回后再替换
 
     // 取消之前的请求
     if (abortControllerRef.current) {
@@ -149,6 +173,21 @@ const PropertySearch: React.FC = () => {
         total: searchData.total || 0,
         took: searchData.took_ms || 0,
       });
+
+      // Store the filters for pagination
+      setCurrentFilters({
+        filters: searchData.intent?.slots || null,
+        options: { top_k: DEFAULT_PAGE_SIZE, offset: 0, semantic: true },
+      });
+
+      // Update pagination state
+      setPagination({
+        page: 1,
+        pageSize: DEFAULT_PAGE_SIZE,
+        totalPages: searchData.total_pages || 0,
+        hasMore: searchData.has_more || false,
+      });
+
       setMessages((prev) =>
         prev.map((msg) =>
           msg.id === aiMessageId
@@ -184,6 +223,69 @@ const PropertySearch: React.FC = () => {
       console.log("[SEARCH] Completed, ready for next request");
     }
   }, []);
+
+  // 新增：获取分页结果的函数
+  const fetchSearchResults = useCallback(async (page: number, pageSize: number = DEFAULT_PAGE_SIZE) => {
+    if (!currentFilters?.filters) return;
+
+    // 标记正在处理
+    isProcessingRef.current = true;
+    setIsSearching(true);
+
+    // 取消之前的请求
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+
+    try {
+      const offset = (page - 1) * pageSize;
+      const requestBody = {
+        filters: currentFilters.filters || null,
+        options: {
+          top_k: pageSize,
+          offset: offset,
+          semantic: true,
+        },
+      };
+
+      const response = await fetch(`/api/v1/search/results`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        signal: controller.signal,
+        body: JSON.stringify(requestBody),
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+
+      const resultData: SearchResultResponse = await response.json();
+      setProperties(resultData.results || []);
+
+      // Update pagination state
+      setPagination({
+        page: page,
+        pageSize: pageSize,
+        totalPages: resultData.total_pages || 0,
+        hasMore: resultData.has_more || false,
+      });
+
+      setIsSearching(false);
+    } catch (error: any) {
+      if (error.name === "AbortError") {
+        console.log("[PAGINATION] Aborted");
+      } else {
+        console.error("[PAGINATION] Error:", error);
+      }
+      setIsSearching(false);
+    } finally {
+      isProcessingRef.current = false;
+      console.log("[PAGINATION] Completed, ready for next request");
+    }
+  }, [currentFilters]);
 
   const renderPropertyCard = (property: Property) => (
     <Card key={property.listing_id} shadows="hover" style={{ marginBottom: 16 }} className="property-card">
@@ -358,6 +460,21 @@ const PropertySearch: React.FC = () => {
                           in {searchStats?.took}ms
                         </Text>
                       </Space>
+                      {/* 分页控件 */}
+                      {pagination.totalPages > 1 && (
+                        <div style={{ marginTop: 16 }}>
+                          <Pagination
+                            total={searchStats?.total || 0}
+                            pageSize={pagination.pageSize}
+                            currentPage={pagination.page}
+                            onPageChange={(page) => fetchSearchResults(page, pagination.pageSize)}
+                            showTotal
+                            showSizeChanger
+                            pageSizeOpts={[10, 20, 50]}
+                            onPageSizeChange={(size) => fetchSearchResults(1, size)}
+                          />
+                        </div>
+                      )}
                     </div>
                     <div
                       style={{

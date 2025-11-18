@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"math"
 	"time"
 
 	"core/internal/model"
@@ -30,6 +31,73 @@ func NewSearchService(
 
 // SearchEventCallback is called for streaming search events
 type SearchEventCallback func(event string, data any) error
+
+// SearchWithFilters performs a search using pre-parsed filters without AI intent parsing
+func (s *SearchService) SearchWithFilters(ctx context.Context, filters *model.SearchFilters, options *model.SearchOptions) (*model.SearchResponse, error) {
+	startTime := time.Now()
+
+	// Set default options
+	if options == nil {
+		options = &model.SearchOptions{
+			TopK:     20,
+			Offset:   0,
+			Semantic: true,
+		}
+	}
+
+	// Use empty semantic keywords since we're not doing AI parsing
+	var semanticKeywords []string
+
+	// Search database with filters and full-text search
+	listings, total, err := s.repo.SearchWithFilters(
+		ctx,
+		filters,
+		semanticKeywords,
+		options.TopK,
+		options.Offset,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	// Build text rank map (from PostgreSQL ts_rank)
+	textRanks := make(map[int64]float64)
+	for i, listing := range listings {
+		// Higher rank for earlier results (simulated from ORDER BY text_rank DESC)
+		textRanks[listing.ListingID] = 1.0 - (float64(i) / float64(len(listings)))
+	}
+
+	// Rank and score results
+	results := s.ranker.RankResults(listings, textRanks, filters)
+
+	// Calculate response time
+	took := time.Since(startTime).Milliseconds()
+
+	pageSize := options.TopK
+	if pageSize <= 0 {
+		pageSize = len(results)
+		if pageSize == 0 {
+			pageSize = 1
+		}
+	}
+	page := (options.Offset / pageSize) + 1
+	totalPages := 0
+	if pageSize > 0 {
+		totalPages = int(math.Ceil(float64(total) / float64(pageSize)))
+	}
+	hasMore := options.Offset+len(results) < total
+
+	return &model.SearchResponse{
+		Results:    results,
+		Total:      total,
+		Page:       page,
+		PageSize:   pageSize,
+		TotalPages: totalPages,
+		HasMore:    hasMore,
+		Intent:     nil, // No intent since we're not doing AI parsing
+		Took:       took,
+	}, nil
+}
 
 // Search performs a complete search with intent parsing, filtering, and ranking
 func (s *SearchService) Search(ctx context.Context, req *model.SearchRequest) (*model.SearchResponse, error) {
@@ -86,11 +154,29 @@ func (s *SearchService) Search(ctx context.Context, req *model.SearchRequest) (*
 		_ = s.repo.LogSearch(context.Background(), req.Query, intentResult.Slots, intentResult.SemanticKeywords, total, listingIDs, int(took))
 	}()
 
+	pageSize := options.TopK
+	if pageSize <= 0 {
+		pageSize = len(results)
+		if pageSize == 0 {
+			pageSize = 1
+		}
+	}
+	page := (options.Offset / pageSize) + 1
+	totalPages := 0
+	if pageSize > 0 {
+		totalPages = int(math.Ceil(float64(total) / float64(pageSize)))
+	}
+	hasMore := options.Offset+len(results) < total
+
 	return &model.SearchResponse{
-		Results: results,
-		Total:   total,
-		Intent:  intentResult,
-		Took:    took,
+		Results:    results,
+		Total:      total,
+		Page:       page,
+		PageSize:   pageSize,
+		TotalPages: totalPages,
+		HasMore:    hasMore,
+		Intent:     intentResult,
+		Took:       took,
 	}, nil
 }
 
@@ -184,11 +270,29 @@ func (s *SearchService) SearchStream(ctx context.Context, req *model.SearchReque
 		_ = s.repo.LogSearch(context.Background(), req.Query, intentResult.Slots, intentResult.SemanticKeywords, total, listingIDs, int(took))
 	}()
 
+	pageSize := options.TopK
+	if pageSize <= 0 {
+		pageSize = len(results)
+		if pageSize == 0 {
+			pageSize = 1
+		}
+	}
+	page := (options.Offset / pageSize) + 1
+	totalPages := 0
+	if pageSize > 0 {
+		totalPages = int(math.Ceil(float64(total) / float64(pageSize)))
+	}
+	hasMore := options.Offset+len(results) < total
+
 	return &model.SearchResponse{
-		Results: results,
-		Total:   total,
-		Intent:  intentResult,
-		Took:    took,
+		Results:    results,
+		Total:      total,
+		Page:       page,
+		PageSize:   pageSize,
+		TotalPages: totalPages,
+		HasMore:    hasMore,
+		Intent:     intentResult,
+		Took:       took,
 	}, nil
 }
 

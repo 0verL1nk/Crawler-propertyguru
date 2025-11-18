@@ -150,6 +150,54 @@ func sendSSE(c *gin.Context, event string, data any) {
 	}
 }
 
+// SearchResults handles POST /api/v1/search/results - paginated search results
+func (h *SearchHandler) SearchResults(c *gin.Context) {
+	var req model.SearchResultRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request: " + err.Error()})
+		return
+	}
+
+	// Set default options if not provided
+	if req.Options == nil {
+		req.Options = &model.SearchOptions{
+			TopK:     h.defaultLimit,
+			Offset:   0,
+			Semantic: true,
+		}
+	} else {
+		// Validate and cap limits
+		if req.Options.TopK <= 0 {
+			req.Options.TopK = h.defaultLimit
+		}
+		if req.Options.TopK > h.maxLimit {
+			req.Options.TopK = h.maxLimit
+		}
+		if req.Options.Offset < 0 {
+			req.Options.Offset = 0
+		}
+	}
+
+	// Perform search with pre-parsed filters (no AI parsing)
+	response, err := h.searchService.SearchWithFilters(c.Request.Context(), req.Filters, req.Options)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Search failed: " + err.Error()})
+		return
+	}
+
+	// Return only the results and pagination info
+	result := &model.SearchResultResponse{
+		Results:    response.Results,
+		Page:       response.Page,
+		PageSize:   response.PageSize,
+		TotalPages: response.TotalPages,
+		HasMore:    response.HasMore,
+		Took:       response.Took,
+	}
+
+	c.JSON(http.StatusOK, result)
+}
+
 // GetListing handles GET /api/v1/listings/:id
 func (h *SearchHandler) GetListing(c *gin.Context) {
 	listingIDStr := c.Param("id")

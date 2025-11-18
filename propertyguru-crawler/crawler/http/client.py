@@ -89,9 +89,17 @@ class HttpClient:
             options.setdefault("api_key", os.getenv("SCRAPERAPI_KEY"))
             if not options["api_key"]:
                 raise ValueError("ScraperAPI provider requires SCRAPERAPI_KEY")
+        elif provider == "scrapingbee":
+            options.setdefault("api_key", os.getenv("SCRAPINGBEE_API_KEY"))
+            if not options["api_key"]:
+                raise ValueError("ScrapingBee provider requires SCRAPINGBEE_API_KEY")
         elif provider == "oxylabs":
             options.setdefault("username", os.getenv("OXYLABS_USERNAME"))
             options.setdefault("password", os.getenv("OXYLABS_PASSWORD"))
             if not options["username"] or not options["password"]:
                 raise ValueError("Oxylabs provider requires OXYLABS_USERNAME and OXYLABS_PASSWORD")
+        elif provider == "firecrawl":
+            options.setdefault("api_key", os.getenv("FIRECRAWL_API_KEY"))
+            if not options["api_key"]:
+                raise ValueError("Firecrawl provider requires FIRECRAWL_API_KEY")
         return options

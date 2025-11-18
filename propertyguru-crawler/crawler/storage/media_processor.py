@@ -542,7 +542,6 @@ class MediaProcessor:
         try:
             # 如果配置为不立即处理，只保存原始URL
             if not self.process_immediately:
-                logger.debug(f"跳过去水印处理，只保存原始URL: {image_url}")
                 return MediaItem(
                     listing_id=listing_id,
                     media_type="image",
@@ -699,5 +698,5 @@ class MediaProcessor:
             elif isinstance(result, MediaItem):
                 media_items.append(result)
 
-        logger.info(f"处理完成: {len(media_items)}/{len(media_urls)} 个媒体文件")
+        logger.debug(f"处理完成: {len(media_items)}/{len(media_urls)} 个媒体文件")
         return media_items

@@ -118,10 +118,16 @@ crawler:
   # User-Agent轮换
   rotate_user_agent: true
   # 是否使用代理
-  use_proxy: true
+  use_proxy: false
+  # 详情页并行爬取的最大并发（仅在使用代理时生效）
+  listing_concurrency: 3
+  # 直连IP模式下是否允许开启并行（默认关闭，避免IP被封）
+  direct_ip_parallel: false
+  # 直连IP并行时的最大并发数
+  direct_ip_parallel_concurrency: 1
   # 直连IP时的配置（当 use_proxy=false 或 proxy.enabled=false 时生效）
   direct_ip_limit_per_page: 1  # 每页最多爬取的房源数（直连IP时，默认1个）
-  direct_ip_delay: 5  # 每个房源之间的延迟（秒），直连IP时使用，避免频率过高
+  direct_ip_delay: 1  # 每个房源之间的延迟（秒），直连IP时使用，避免频率过高
   # 是否验证SSL证书
   verify_ssl: true
 

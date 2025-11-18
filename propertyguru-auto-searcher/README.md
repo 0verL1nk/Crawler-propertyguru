@@ -178,7 +178,7 @@ go run cmd/server/main.go
 
 ### 搜索接口
 
-**POST** `/api/v1/search`
+**POST** `/api/v1/search` - 标准搜索（返回搜索参数和元数据）
 
 **请求体:**
 
@@ -227,6 +227,54 @@ go run cmd/server/main.go
     "confidence": 0.85
   },
   "took_ms": 125
+}
+```
+
+### 分页搜索结果接口
+
+**POST** `/api/v1/search/results` - 获取分页搜索结果
+
+**请求体:**
+
+```json
+{
+  "query": "我想找靠近地铁的三房公寓，预算120万以内",
+  "filters": {
+    "price_max": 1200000,
+    "bedrooms": 3,
+    "unit_type": "Condo",
+    "mrt_distance_max": 1000
+  },
+  "options": {
+    "top_k": 20,
+    "offset": 20,
+    "semantic": true
+  }
+}
+```
+
+**响应:**
+
+```json
+{
+  "results": [
+    {
+      "listing_id": 60157326,
+      "title": "620D Punggol Drive",
+      "price": 1180000,
+      "bedrooms": 3,
+      "location": "Punggol",
+      "mrt_station": "PE6 Oasis LRT",
+      "mrt_distance_m": 520,
+      "score": 0.91,
+      "matched_reasons": ["三房", "靠近地铁", "价格符合"]
+    }
+  ],
+  "page": 2,
+  "page_size": 20,
+  "total_pages": 3,
+  "has_more": true,
+  "took_ms": 85
 }
 ```
 
@@ -281,7 +329,7 @@ propertyguru-auto-searcher/
 │   ├── config/
 │   │   └── config.go            # 配置管理
 │   ├── handler/
-│   │   ├── search.go            # 搜索接口
+│   │   ├── search.go            # 搜索接口（包含分页结果接口）
 │   │   ├── embedding.go         # Embedding 接口
 │   │   └── feedback.go          # 反馈接口
 │   ├── service/
@@ -291,16 +339,16 @@ propertyguru-auto-searcher/
 │   │   └── ranker.go            # 排序服务
 │   ├── model/
 │   │   ├── listing.go           # 房源数据模型
-│   │   ├── query.go             # 查询模型
+│   │   ├── query.go             # 查询模型（新增分页结果模型）
 │   │   └── intent.go            # 意图模型
 │   └── repository/
 │       └── postgres.go          # 数据库操作
 ├── web/
-│   ├── index.html               # 前端页面
-│   └── static/
-│       ├── css/
-│       └── js/
-│           └── app.js           # 前端逻辑
+│   ├── src/
+│   │   └── components/
+│   │       └── PropertySearch.tsx  # 前端组件（支持分页）
+│   ├── dist/                    # 构建后的前端资源
+│   └── index.html               # 前端页面入口
 ├── sql/
 │   └── init.sql                 # 数据库初始化脚本
 ├── go.mod

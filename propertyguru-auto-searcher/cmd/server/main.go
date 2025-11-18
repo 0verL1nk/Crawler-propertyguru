@@ -163,6 +163,7 @@ func main() {
 	{
 		// Search endpoints
 		apiV1.POST("/search", searchHandler.Search)
+		apiV1.POST("/search/results", searchHandler.SearchResults) // Paginated search results
 		apiV1.POST("/search/stream", searchHandler.SearchStream) // Streaming search
 		apiV1.GET("/listings/:id", searchHandler.GetListing)
 

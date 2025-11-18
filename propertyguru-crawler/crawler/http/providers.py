@@ -5,10 +5,10 @@
 from __future__ import annotations
 
 import abc
+import types
 from typing import Any, Mapping
 
 import aiohttp
-from aiohttp import BasicAuth
 import requests
 
 
@@ -72,7 +72,7 @@ class ZenRowsHttpProvider(HttpProvider):
         params = {
             "url": url,
             "apikey": self.api_key,
-            "js_render": "false",
+            "js_render": "true",
             "premium_proxy": "true",
         }
         params.update(extra_params)
@@ -132,6 +132,42 @@ class ScraperApiHttpProvider(HttpProvider):
         return response
 
 
+class ScrapingBeeHttpProvider(HttpProvider):
+    name = "scrapingbee"
+
+    def __init__(self, api_key: str, base_url: str = "https://app.scrapingbee.com/api/v1") -> None:
+        if not api_key:
+            raise ValueError("ScrapingBee provider requires api_key")
+        self.api_key = api_key
+        self.base_url = base_url
+
+    def _build_params(self, url: str, extra_params: Mapping[str, Any]) -> dict[str, Any]:
+        params = {"api_key": self.api_key, "url": url}
+        params.update(extra_params)
+        return params
+
+    def send_sync(self, url: str, **kwargs) -> requests.Response:
+        headers = self._prepare_headers(kwargs)
+        timeout = kwargs.pop("timeout", 30)
+        params = self._build_params(url, kwargs.pop("params", {}))
+        logger.debug(f"通过ScrapingBee发送请求: {url}")
+        response = requests.get(self.base_url, params=params, headers=headers, timeout=timeout, **kwargs)
+        response.raise_for_status()
+        return response
+
+    async def send_async(self, url: str, session: aiohttp.ClientSession | None = None, **kwargs) -> aiohttp.ClientResponse:
+        headers = self._prepare_headers(kwargs)
+        timeout = aiohttp.ClientTimeout(total=kwargs.pop("timeout", 30))
+        params = self._build_params(url, kwargs.pop("params", {}))
+        logger.debug(f"通过ScrapingBee发送异步请求: {url}")
+        if session:
+            response = await session.get(self.base_url, params=params, headers=headers, timeout=timeout, **kwargs)
+        else:
+            async with aiohttp.ClientSession(timeout=timeout) as new_session:
+                response = await new_session.get(self.base_url, params=params, headers=headers, **kwargs)
+        return response
+
+
 class OxylabsHttpProvider(HttpProvider):
     name = "oxylabs"
 
@@ -172,6 +208,7 @@ class OxylabsHttpProvider(HttpProvider):
         headers = self._prepare_headers(kwargs)
         timeout = aiohttp.ClientTimeout(total=kwargs.pop("timeout", 30))
         payload = self._build_payload(url, kwargs.pop("json", {}))
+        logger.debug(f"通过Oxylabs发送异步请求: {url}")
         if session:
             response = await session.post(
                 self.base_url,
@@ -190,14 +227,136 @@ class OxylabsHttpProvider(HttpProvider):
                     headers=headers,
                     **kwargs,
                 )
+        response.raise_for_status()
         return response
+
+
+class _FirecrawlAsyncResponse:
+    """轻量封装，提供与 aiohttp.ClientResponse 部分类似的接口。"""
+
+    def __init__(
+        self,
+        *,
+        status: int,
+        headers: Mapping[str, str],
+        url: str,
+        reason: str | None,
+        html: str,
+        firecrawl_json: Mapping[str, Any],
+    ) -> None:
+        self.status = status
+        self.headers = headers
+        self.url = url
+        self.reason = reason
+        self.firecrawl_json = firecrawl_json
+        self._html = html
+
+    async def text(self) -> str:
+        return self._html
+
+    async def json(self) -> Mapping[str, Any]:
+        return self.firecrawl_json
+
+    async def read(self) -> bytes:
+        return self._html.encode("utf-8")
+
+    def release(self) -> None:  # 兼容 aiohttp.ClientResponse 接口
+        return None
+
+
+class FirecrawlHttpProvider(HttpProvider):
+    name = "firecrawl"
+
+    def __init__(
+        self,
+        api_key: str,
+        base_url: str = "https://api.firecrawl.dev/v2/scrape",
+        default_formats: list[str] | None = None,
+    ) -> None:
+        if not api_key:
+            raise ValueError("Firecrawl provider requires api_key")
+        self.api_key = api_key
+        self.base_url = base_url
+        self.default_formats = default_formats or ["html"]
+
+    def _auth_headers(self, headers: Mapping[str, Any]) -> dict[str, str]:
+        merged_headers = {**headers}
+        merged_headers.setdefault("Content-Type", "application/json")
+        merged_headers["Authorization"] = f"Bearer {self.api_key}"
+        return merged_headers
+
+    def _build_payload(self, url: str, extra_payload: Mapping[str, Any]) -> dict[str, Any]:
+        payload = {"url": url, "formats": self.default_formats}
+        payload.update(extra_payload)
+        return payload
+
+    @staticmethod
+    def _extract_html(data: Mapping[str, Any]) -> str:
+        data_block = data.get("data")
+        if not isinstance(data_block, Mapping):
+            raise ValueError("Firecrawl 响应缺少 data 字段")
+        html = data_block.get("html")
+        if not isinstance(html, str):
+            raise ValueError("Firecrawl 响应缺少 data.html 字段")
+        return html
+
+    def send_sync(self, url: str, **kwargs) -> requests.Response:
+        headers = self._auth_headers(self._prepare_headers(kwargs))
+        timeout = kwargs.pop("timeout", 30)
+        payload = self._build_payload(url, kwargs.pop("json", {}))
+        logger.debug(f"通过Firecrawl发送请求: {url}")
+        response = requests.post(self.base_url, json=payload, headers=headers, timeout=timeout, **kwargs)
+        response.raise_for_status()
+        data = response.json()
+        html = self._extract_html(data)
+        response._content = html.encode("utf-8")
+        response.encoding = "utf-8"
+        response.headers["Content-Type"] = "text/html; charset=utf-8"
+        response.firecrawl_json = data  # type: ignore[attr-defined]
+        response.json = types.MethodType(lambda self, **_kwargs: data, response)  # type: ignore[assignment]
+        return response
+
+    async def send_async(
+        self,
+        url: str,
+        session: aiohttp.ClientSession | None = None,
+        **kwargs,
+    ) -> aiohttp.ClientResponse:
+        headers = self._auth_headers(self._prepare_headers(kwargs))
+        timeout = aiohttp.ClientTimeout(total=kwargs.pop("timeout", 30))
+        payload = self._build_payload(url, kwargs.pop("json", {}))
+        logger.debug(f"通过Firecrawl发送异步请求: {url}")
+
+        async def _request(active_session: aiohttp.ClientSession) -> aiohttp.ClientResponse:
+            response = await active_session.post(self.base_url, json=payload, headers=headers, timeout=timeout, **kwargs)
+            response.raise_for_status()
+            data = await response.json()
+            html = self._extract_html(data)
+            wrapped = _FirecrawlAsyncResponse(
+                status=response.status,
+                headers=dict(response.headers),
+                url=str(response.url),
+                reason=response.reason,
+                html=html,
+                firecrawl_json=data,
+            )
+            await response.release()
+            return wrapped  # type: ignore[return-value]
+
+        if session:
+            return await _request(session)
+
+        async with aiohttp.ClientSession(timeout=timeout) as new_session:
+            return await _request(new_session)
 
 
 PROVIDER_REGISTRY: dict[str, type[HttpProvider]] = {
     "direct": DirectHttpProvider,
     "zenrows": ZenRowsHttpProvider,
     "scraperapi": ScraperApiHttpProvider,
+    "scrapingbee": ScrapingBeeHttpProvider,
     "oxylabs": OxylabsHttpProvider,
+    "firecrawl": FirecrawlHttpProvider,
 }
 
 

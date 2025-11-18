@@ -346,6 +346,25 @@ class DBOperations:
     def _insert_new_media(self, session, to_insert: list[dict]):
         """插入新媒体记录"""
         if to_insert:
+            listing_ids = {item["listing_id"] for item in to_insert}
+            existing_ids = set(
+                session.scalars(
+                    select(ListingInfoORM.listing_id).where(
+                        ListingInfoORM.listing_id.in_(listing_ids)
+                    )
+                )
+            )
+
+            if missing_ids := listing_ids - existing_ids:
+                logger.warning(
+                    "发现缺失的房源记录，跳过对应媒体插入: %s",
+                    ", ".join(str(mid) for mid in sorted(missing_ids)),
+                )
+                to_insert = [item for item in to_insert if item["listing_id"] in existing_ids]
+
+            if not to_insert:
+                return
+
             stmt = insert(MediaItemORM).values(to_insert)
             session.execute(stmt)
             logger.debug(f"插入 {len(to_insert)} 条新媒体记录")

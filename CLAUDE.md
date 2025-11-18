@@ -199,7 +199,8 @@ SERVER_PORT=8080
 ## 🌐 API Endpoints
 
 ### Search Engine API
-- `POST /api/v1/search` - Standard search with AI intent parsing
+- `POST /api/v1/search` - Standard search with AI intent parsing (returns search parameters and metadata)
+- `POST /api/v1/search/results` - Paginated search results
 - `POST /api/v1/search/stream` - Streaming search with real-time results
 - `GET /api/v1/listings/:id` - Get specific listing details
 - `POST /api/v1/embeddings/batch` - Update vector embeddings

@@ -77,6 +77,17 @@ class PropertyGuruCrawler:
         crawler_config = self.config.get_section("crawler")
         self.max_retries = crawler_config.get("max_retries", 3) if crawler_config else 3
         self.retry_delay = crawler_config.get("retry_delay", 2) if crawler_config else 2
+        self.listing_concurrency = (
+            crawler_config.get("listing_concurrency", 3) if crawler_config else 3
+        )
+        self.direct_ip_parallel = (
+            crawler_config.get("direct_ip_parallel", False) if crawler_config else False
+        )
+        self.direct_ip_parallel_concurrency = (
+            crawler_config.get("direct_ip_parallel_concurrency", 2)
+            if crawler_config
+            else 2
+        )
 
         # 地理编码配置
         self.enable_geocoding = os.getenv("ENABLE_GEOCODING", "false").lower() == "true"
@@ -389,7 +400,7 @@ class PropertyGuruCrawler:
         if self.listing_http_crawler:
             try:
                 logger.debug("尝试通过HTTP爬虫解析最大页数")
-                http_max_pages = self.listing_http_crawler.get_max_pages()
+                http_max_pages = self.listing_http_crawler.get_max_pages(base_page)
                 if http_max_pages:
                     logger.info("HTTP爬虫解析到最大页数: %s", http_max_pages)
                     return http_max_pages
@@ -760,7 +771,8 @@ class PropertyGuruCrawler:
         try:
             # 先保存基本信息并刷新缓冲区，确保房源已存在
             # 使用 flush=True 确保立即写入数据库
-            self.db_ops.save_listing_info(listing, flush=True)
+            if not self.db_ops.save_listing_info(listing, flush=True):
+                raise RuntimeError(f"保存房源基本信息失败: {listing.listing_id}")
 
             # 然后保存详细信息（property_details, description, amenities, facilities等）
             # amenities和facilities现在直接通过PropertyDetails保存到info表
@@ -1052,7 +1064,7 @@ class PropertyGuruCrawler:
 
         # 如果使用直连IP（不使用代理），限制每次只爬取一个房源
         original_count = len(listings)
-        if not self.use_proxy:
+        if not self.use_proxy and not self.direct_ip_parallel:
             logger.debug("=" * 60)
             logger.debug("⚠️  检测到使用直连IP（不使用代理）")
             logger.debug(f"   限制每页只爬取 {self.direct_ip_limit_per_page} 个房源")
@@ -1065,24 +1077,59 @@ class PropertyGuruCrawler:
                 )
             listings = listings[: self.direct_ip_limit_per_page]
 
-        for idx, listing in enumerate(listings, 1):
-            logger.debug(
-                f"[{page_num}/{end_page}] [{idx}/{len(listings)}] 爬取房源: {listing.listing_id}"
-            )
+        # 直连IP场景依旧串行执行，保留延迟控制
+        if not self.use_proxy and not self.direct_ip_parallel:
+            for idx, listing in enumerate(listings, 1):
+                logger.debug(
+                    f"[{page_num}/{end_page}] [{idx}/{len(listings)}] 爬取房源: {listing.listing_id}"
+                )
 
-            success = await self.crawl_listing(listing)
+                success = await self.crawl_listing(listing)
+                if success:
+                    success_count += 1
+                    logger.debug(f"✅ 成功: {listing.listing_id}")
+                else:
+                    fail_count += 1
+                    logger.warning(f"❌ 失败: {listing.listing_id}")
+
+                if idx < len(listings):
+                    delay = self.direct_ip_delay
+                    logger.debug(f"等待 {delay} 秒后继续...")
+                    time.sleep(delay)
+
+            return success_count, fail_count
+
+        # 使用代理时，按配置的最大并发并行爬取详情页
+        if self.use_proxy:
+            concurrency = max(1, self.listing_concurrency)
+        else:
+            concurrency = max(1, self.direct_ip_parallel_concurrency)
+        semaphore = asyncio.Semaphore(concurrency)
+
+        async def crawl_single(idx: int, listing: ListingInfo) -> tuple[int, int, bool]:
+            logger.debug(
+                f"[{page_num}/{end_page}] [{idx}/{len(listings)}] 排队爬取房源: {listing.listing_id}"
+            )
+            async with semaphore:
+                logger.debug(
+                    f"[{page_num}/{end_page}] [{idx}/{len(listings)}] 开始爬取房源: {listing.listing_id}"
+                )
+                result = await self.crawl_listing(listing)
+                return idx, listing.listing_id, result
+
+        tasks = [
+            asyncio.create_task(crawl_single(idx, listing))
+            for idx, listing in enumerate(listings, 1)
+        ]
+
+        for task in asyncio.as_completed(tasks):
+            idx, listing_id, success = await task
             if success:
                 success_count += 1
-                logger.debug(f"✅ 成功: {listing.listing_id}")
+                logger.debug(f"✅ 成功: {listing_id}")
             else:
                 fail_count += 1
-                logger.warning(f"❌ 失败: {listing.listing_id}")
-
-            # 如果使用直连IP，使用更长的延迟
-            if idx < len(listings):
-                delay = self.direct_ip_delay if not self.use_proxy else 2
-                logger.debug(f"等待 {delay} 秒后继续...")
-                time.sleep(delay)
+                logger.warning(f"❌ 失败: {listing_id}")
 
         return success_count, fail_count
 

@@ -13,8 +13,8 @@ type SearchFilters struct {
 	PriceMax       *float64 `json:"price_max,omitempty"`
 	Bedrooms       *int     `json:"bedrooms,omitempty"`
 	Bathrooms      *int     `json:"bathrooms,omitempty"`
-	AreaSqftMin    *float64 `json:"area_sqft_min,omitempty"`  // 最小面积
-	AreaSqftMax    *float64 `json:"area_sqft_max,omitempty"`  // 最大面积
+	AreaSqftMin    *float64 `json:"area_sqft_min,omitempty"` // 最小面积
+	AreaSqftMax    *float64 `json:"area_sqft_max,omitempty"` // 最大面积
 	UnitType       *string  `json:"unit_type,omitempty"`
 	MRTDistanceMax *int     `json:"mrt_distance_max,omitempty"`
 	Location       *string  `json:"location,omitempty"`
@@ -32,10 +32,30 @@ type SearchOptions struct {
 
 // SearchResponse represents a search result response
 type SearchResponse struct {
-	Results []ListingSearchResult `json:"results"`
-	Total   int                   `json:"total"`
-	Intent  *IntentResult         `json:"intent,omitempty"`
-	Took    int64                 `json:"took_ms"` // Response time in milliseconds
+	Results    []ListingSearchResult `json:"results"`
+	Total      int                   `json:"total"`
+	Page       int                   `json:"page"`
+	PageSize   int                   `json:"page_size"`
+	TotalPages int                   `json:"total_pages"`
+	HasMore    bool                  `json:"has_more"`
+	Intent     *IntentResult         `json:"intent,omitempty"`
+	Took       int64                 `json:"took_ms"` // Response time in milliseconds
+}
+
+// SearchResultRequest represents a request for paginated search results
+type SearchResultRequest struct {
+	Filters *SearchFilters `json:"filters,omitempty"`
+	Options *SearchOptions `json:"options,omitempty"`
+}
+
+// SearchResultResponse represents a paginated search result response
+type SearchResultResponse struct {
+	Results    []ListingSearchResult `json:"results"`
+	Page       int                   `json:"page"`
+	PageSize   int                   `json:"page_size"`
+	TotalPages int                   `json:"total_pages"`
+	HasMore    bool                  `json:"has_more"`
+	Took       int64                 `json:"took_ms"` // Response time in milliseconds
 }
 
 // EmbeddingBatchRequest represents a batch embedding update request

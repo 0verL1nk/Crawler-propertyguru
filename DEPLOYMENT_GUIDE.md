@@ -76,7 +76,7 @@ brew install git      # macOS
 git clone https://github.com/0verL1nk/Crawler-propertyguru.git
 cd Crawler-propertyguru
 ```
-
+- 如果直接下载了zip,解压后进入项目也是一样的
 ### 3. 部署搜索引擎
 
 在部署搜索引擎之前，请确保正确配置环境变量，特别是OpenAI API密钥。
@@ -88,17 +88,18 @@ cd propertyguru-auto-searcher
 # 配置环境变量（重要！）
 cp config.example.env .env
 # 编辑 .env 文件，设置 OpenAI API 密钥和其他配置
-# 至少需要设置 OPENAI_API_KEY=sk-your-api-key-here
+# 至少需要设置 OPENAI_API_KEY=sk-your-api-key-here还有数据库DATABASE_URL
 # 注意：Docker部署会使用docker-compose.yml中的环境变量，但.env文件中的配置会覆盖默认值
 
-# 启动所有服务
-docker compose up -d
+docker build -t propertyguru-auto-searcher .
 
-# 查看服务状态
-docker compose ps
-
-# 查看日志
-docker compose logs -f searcher
+docker run -d --name propertyguru-auto-searcher\
+  -e DATABASE_URL="database_url" \
+  -e OPENAI_API_KEY=api_key \
+  -e OPENAI_API_BASE=base_url \
+  -e OPENAI_CHAT_MODEL=model_name \
+  -p 8080:8080 \
+  propertyguru-auto-searcher
 ```
 
 服务启动后，可以通过以下地址访问：
@@ -184,8 +185,7 @@ cp env.example .env
 # 编辑 .env 文件，至少配置以下必填项：
 # 1. 数据库连接信息（POSTGRESQL_URI 或 PG_* 系列配置）
 # 2. 浏览器配置（BROWSER_TYPE 等）
-# 3. HTTP爬虫配置（USE_HTTP_CRAWLER 等）
-
+# 3. HTTP爬虫配置（USE_HTTP_CRAWLER 等）,注意选择一个供应商,推荐scraperAPI
 # 安装 uv 包管理器
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
@@ -207,7 +207,7 @@ uv run python main.py --test-single
 
 ```bash
 # PostgreSQL 连接信息（连接到搜索引擎的数据库）
-POSTGRESQL_URI=postgresql://property_user:property_password@localhost:5432/property_search?sslmode=disable
+POSTGRESQL_URI=postgresql://property_user:property_password@localhost:5432/property_search?sslmode=true
 
 # 或分别配置
 PG_HOST=localhost
@@ -239,7 +239,7 @@ BROWSER_DISABLE_IMAGES=true
 搜索引擎需要配置 OpenAI API 密钥：
 
 ```bash
-# OpenAI API 配置
+# OpenAI Compatible API 配置
 OPENAI_API_KEY=sk-your-api-key-here
 OPENAI_API_BASE=https://api.openai.com/v1
 OPENAI_CHAT_MODEL=gpt-3.5-turbo
