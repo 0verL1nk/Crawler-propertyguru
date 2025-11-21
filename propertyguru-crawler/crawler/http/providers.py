@@ -188,6 +188,19 @@ class OxylabsHttpProvider(HttpProvider):
         payload.update(extra_payload)
         return payload
 
+    @staticmethod
+    def _extract_html(data: Mapping[str, Any]) -> str:
+        results = data.get("results")
+        if not isinstance(results, list) or not results:
+            raise ValueError("Oxylabs 响应缺少 results 字段")
+        first = results[0]
+        if not isinstance(first, Mapping):
+            raise ValueError("Oxylabs 响应的 results[0] 不是对象")
+        content = first.get("content")
+        if not isinstance(content, str):
+            raise ValueError("Oxylabs 响应缺少 results[0].content 字段")
+        return content
+
     def send_sync(self, url: str, **kwargs) -> requests.Response:
         headers = self._prepare_headers(kwargs)
         timeout = kwargs.pop("timeout", 30)
@@ -202,6 +215,13 @@ class OxylabsHttpProvider(HttpProvider):
             **kwargs,
         )
         response.raise_for_status()
+        data = response.json()
+        html = self._extract_html(data)
+        response._content = html.encode("utf-8")  # type: ignore[attr-defined]
+        response.encoding = "utf-8"
+        response.headers["Content-Type"] = "text/html; charset=utf-8"
+        response.oxylabs_json = data  # type: ignore[attr-defined]
+        response.json = types.MethodType(lambda self, **_kwargs: data, response)  # type: ignore[assignment]
         return response
 
     async def send_async(self, url: str, session: aiohttp.ClientSession | None = None, **kwargs) -> aiohttp.ClientResponse:
@@ -209,8 +229,9 @@ class OxylabsHttpProvider(HttpProvider):
         timeout = aiohttp.ClientTimeout(total=kwargs.pop("timeout", 30))
         payload = self._build_payload(url, kwargs.pop("json", {}))
         logger.debug(f"通过Oxylabs发送异步请求: {url}")
-        if session:
-            response = await session.post(
+
+        async def _request(active_session: aiohttp.ClientSession) -> aiohttp.ClientResponse:
+            response = await active_session.post(
                 self.base_url,
                 auth=aiohttp.BasicAuth(self.username, self.password),
                 json=payload,
@@ -218,20 +239,29 @@ class OxylabsHttpProvider(HttpProvider):
                 timeout=timeout,
                 **kwargs,
             )
-        else:
-            async with aiohttp.ClientSession(timeout=timeout) as new_session:
-                response = await new_session.post(
-                    self.base_url,
-                    auth=aiohttp.BasicAuth(self.username, self.password),
-                    json=payload,
-                    headers=headers,
-                    **kwargs,
-                )
-        response.raise_for_status()
-        return response
+            response.raise_for_status()
+            data = await response.json()
+            html = self._extract_html(data)
+            wrapped = _InMemoryHtmlResponse(
+                status=response.status,
+                headers=dict(response.headers),
+                url=str(response.url),
+                reason=response.reason,
+                html=html,
+                json_payload=data,
+            )
+            wrapped.oxylabs_json = data  # type: ignore[attr-defined]
+            await response.release()
+            return wrapped  # type: ignore[return-value]
+
+        if session:
+            return await _request(session)
+
+        async with aiohttp.ClientSession(timeout=timeout) as new_session:
+            return await _request(new_session)
 
 
-class _FirecrawlAsyncResponse:
+class _InMemoryHtmlResponse:
     """轻量封装，提供与 aiohttp.ClientResponse 部分类似的接口。"""
 
     def __init__(
@@ -242,20 +272,20 @@ class _FirecrawlAsyncResponse:
         url: str,
         reason: str | None,
         html: str,
-        firecrawl_json: Mapping[str, Any],
+        json_payload: Mapping[str, Any],
     ) -> None:
         self.status = status
         self.headers = headers
         self.url = url
         self.reason = reason
-        self.firecrawl_json = firecrawl_json
+        self.raw_json = json_payload
         self._html = html
 
     async def text(self) -> str:
         return self._html
 
     async def json(self) -> Mapping[str, Any]:
-        return self.firecrawl_json
+        return self.raw_json
 
     async def read(self) -> bytes:
         return self._html.encode("utf-8")
@@ -332,14 +362,15 @@ class FirecrawlHttpProvider(HttpProvider):
             response.raise_for_status()
             data = await response.json()
             html = self._extract_html(data)
-            wrapped = _FirecrawlAsyncResponse(
+            wrapped = _InMemoryHtmlResponse(
                 status=response.status,
                 headers=dict(response.headers),
                 url=str(response.url),
                 reason=response.reason,
                 html=html,
-                firecrawl_json=data,
+                json_payload=data,
             )
+            wrapped.firecrawl_json = data  # type: ignore[attr-defined]
             await response.release()
             return wrapped  # type: ignore[return-value]
 
